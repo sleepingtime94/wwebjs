@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../config");
 const { updateMessageStatusByMessageId } = require("../db");
+const { parseSpintax } = require("../utils/spintax");
 
 class WhatsAppService extends EventEmitter {
   constructor() {
@@ -61,6 +62,7 @@ class WhatsAppService extends EventEmitter {
       "--disable-features=IsolateOrigins,site-per-process",
       "--disable-extensions",
       "--disable-default-apps",
+      "--disable-blink-features=AutomationControlled",
     ];
 
     if (isLinux) {
@@ -268,7 +270,7 @@ class WhatsAppService extends EventEmitter {
     return formatted;
   }
 
-  async sendTextMessage(number, message) {
+  async sendTextMessage(number, message, options = {}) {
     if (!this.state.clientReady || !this.client) {
       const error = new Error("WhatsApp client belum siap. Silakan scan QR code terlebih dahulu.");
       error.statusCode = 503;
@@ -296,10 +298,40 @@ class WhatsAppService extends EventEmitter {
       chatId = numberId._serialized;
     }
 
+    // 1. Spintax parsing jika diaktifkan
+    let finalMessage = message;
+    if (config.antiBan?.enableSpintax && options.spintax !== false) {
+      finalMessage = parseSpintax(message);
+    }
+
+    // 2. Simulasi perilaku manusia (Presence, Seen, Typing Indicator)
+    if (config.antiBan?.simulateTyping && options.simulateTyping !== false) {
+      try {
+        await this.client.sendPresenceAvailable().catch(() => {});
+        const chat = await this.client.getChatById(chatId).catch(() => null);
+        if (chat) {
+          // Tandai chat telah dilihat (seen)
+          await chat.sendSeen().catch(() => {});
+
+          // Durasi simulasi mengetik realistis (1.5s - 4.5s tergantung panjang pesan)
+          const typingDuration = Math.min(
+            4500,
+            Math.max(1500, finalMessage.length * 30 + Math.floor(Math.random() * 600))
+          );
+
+          await chat.sendStateTyping().catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, typingDuration));
+          await chat.clearState().catch(() => {});
+        }
+      } catch (presenceErr) {
+        console.warn("[WA] Warning simulasi kehadiran (presence):", presenceErr.message || presenceErr);
+      }
+    }
+
     console.log(`[WA] Mengirim pesan ke: ${chatId}`);
 
-    // Kirim pesan dan tangkap objek Message
-    const sentMessage = await this.client.sendMessage(chatId, message);
+    // 3. Kirim pesan dan tangkap objek Message
+    const sentMessage = await this.client.sendMessage(chatId, finalMessage);
     const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
 
     return {
@@ -307,7 +339,8 @@ class WhatsAppService extends EventEmitter {
       sender: this.client.info?.wid?.user ?? "API",
       receiver: formattedNumber,
       chatId,
-      message,
+      message: finalMessage,
+      originalMessage: message,
       timestamp: Math.floor(Date.now() / 1000),
     };
   }

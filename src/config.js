@@ -12,4 +12,12 @@ module.exports = {
     password: process.env.DB_PASS || "",
     database: process.env.DB_NAME || "whatsapp",
   },
+  rateLimitMax: Number(process.env.RATE_LIMIT_MAX) || 30,
+  rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60000,
+  antiBan: {
+    minDelayMs: Number(process.env.ANTI_BAN_MIN_DELAY_MS) || 3000,
+    maxDelayMs: Number(process.env.ANTI_BAN_MAX_DELAY_MS) || 6000,
+    simulateTyping: process.env.ANTI_BAN_SIMULATE_TYPING !== "false",
+    enableSpintax: process.env.ANTI_BAN_ENABLE_SPINTAX !== "false",
+  },
 };

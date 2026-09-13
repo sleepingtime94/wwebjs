@@ -19,6 +19,13 @@ Gateway API berbasis Node.js untuk mengirim dan memantau pesan WhatsApp mengguna
 
 - 📱 **QR Code Web Dashboard**: Scan QR langsung melalui browser via WebSocket real-time (`/api/connect`).
 - 🔐 **Autentikasi API Key**: Proteksi endpoint pengiriman pesan dengan header `x-api-key`.
+- 🛡️ **Proteksi Akun & Anti-Ban**:
+  - **Message Queue (FIFO)**: Pengiriman diproses berurutan, mencegah ledakan request serentak (*burst*).
+  - **Human Typing & Presence Simulation**: Simulasi online/available, chat seen, dan status mengetik (*typing...*) sebelum pesan dikirim.
+  - **Random Jitter Delay**: Jeda acak (misal 3–6 detik) antar pesan agar pola pengiriman terlihat manusiawi.
+  - **Spintax Support**: Variasi kata otomatis `{Halo|Hai|Selamat pagi}` untuk menghindari deteksi spam teks identik.
+  - **Puppeteer Stealth**: Menghapus flag automation bawaan browser (`AutomationControlled`).
+  - **Rate Limiting**: Pembatasan request per menit (default 30/menit) untuk mencegah flooding.
 - 📊 **Logging ke Database**: Log status pengiriman pesan (sent, delivered, read, failed) tersimpan ke MySQL.
 - 🔄 **Auto-Reconnect & Lock Cleanup**: Mekanisme auto-recovery session dan pembersihan file lock Chromium.
 - 🚀 **PM2 Ready**: Dilengkapi konfigurasi cluster single-instance PM2 dan script auto-deploy untuk Ubuntu dan Windows.
@@ -106,6 +113,14 @@ PUPPETEER_EXECUTABLE_PATH=
 
 # Environment mode
 NODE_ENV=production
+
+# Konfigurasi Anti-Ban & Rate Limiter
+RATE_LIMIT_MAX=30
+RATE_LIMIT_WINDOW_MS=60000
+ANTI_BAN_MIN_DELAY_MS=3000
+ANTI_BAN_MAX_DELAY_MS=6000
+ANTI_BAN_SIMULATE_TYPING=true
+ANTI_BAN_ENABLE_SPINTAX=true
 ```
 
 ---
@@ -180,13 +195,21 @@ npm run pm2:stop
   ```json
   {
     "number": "081234567890",
-    "message": "Halo! Ini adalah pesan uji coba untuk pembelajaran.",
-    "sender": "System Tester"
+    "message": "{Halo|Hai|Selamat pagi} Bpk/Ibu, ini adalah pesan uji coba.",
+    "sender": "System Tester",
+    "async": false,
+    "spintax": true,
+    "simulateTyping": true
   }
   ```
-  *(Format nomor telepon dapat diawali `08...`, `628...`, atau `+628...`, sistem akan otomatis memformat ke nomor internasional).*
+  *(Catatan parameter):*
+  - `number`: Nomor telepon tujuan (bisa format `08...`, `628...`, `+628...`, atau ID grup `xxx@g.us`).
+  - `message`: Isi pesan. Mendukung format **Spintax** `{opsi1|opsi2|opsi3}` untuk memvariasikan teks otomatis.
+  - `async` *(opsional, default `false`)*: Jika `true`, API langsung merespon status `queued` (202 Accepted) dan memproses pengiriman di latar belakang antrean. Jika `false`, API akan menunggu hingga pesan berhasil dikirim.
+  - `spintax` *(opsional, default `true`)*: Aktifkan/nonaktifkan parser spintax.
+  - `simulateTyping` *(opsional, default `true`)*: Aktifkan/nonaktifkan simulasi pengetikan manusiawi.
 
-- **Response Sukses (200 OK)**:
+- **Response Sukses (200 OK - Sync Mode)**:
   ```json
   {
     "success": true,
@@ -195,9 +218,20 @@ npm run pm2:stop
       "id": 1,
       "messageId": "true_6281234567890@c.us_3EB0...",
       "receiver": "6281234567890",
-      "message": "Halo! Ini adalah pesan uji coba untuk pembelajaran.",
-      "timestamp": "2026-09-13T14:48:00.000Z"
+      "message": "Hai Bpk/Ibu, ini adalah pesan uji coba.",
+      "originalMessage": "{Halo|Hai|Selamat pagi} Bpk/Ibu, ini adalah pesan uji coba.",
+      "timestamp": 1726238880
     }
+  }
+  ```
+
+- **Response Sukses (202 Accepted - Async Mode)**:
+  ```json
+  {
+    "success": true,
+    "status": "queued",
+    "message": "Pesan telah dimasukkan ke dalam antrean pengiriman aman",
+    "queueLength": 3
   }
   ```
 
@@ -208,7 +242,7 @@ npm run pm2:stop
     -H "x-api-key: rahasia-api-key-anda-minimal-32-karakter" \
     -d '{
       "number": "081234567890",
-      "message": "Halo dari API WhatsApp Gateway",
+      "message": "{Halo|Hai} Pelanggan yang terhormat, terima kasih atas kepercayaan Anda!",
       "sender": "Admin"
     }'
   ```

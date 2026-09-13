@@ -1,5 +1,6 @@
 const path = require("path");
 const waService = require("../services/whatsapp");
+const messageQueue = require("../services/messageQueue");
 const { broadcastMessageSent } = require("../services/socket");
 const { logMessage } = require("../db");
 
@@ -9,15 +10,17 @@ async function renderConnectPage(req, res) {
 
 async function getStatus(req, res) {
   const state = waService.getState();
+  const queueStats = messageQueue.getStats();
   res.json({
     success: true,
     status: state.currentStatus,
     ready: state.clientReady,
+    queue: queueStats,
   });
 }
 
 async function sendMessage(req, res) {
-  const { number, message, sender } = req.body;
+  const { number, message, sender, spintax, simulateTyping, async: isAsync } = req.body;
 
   if (!number || !message || typeof message !== "string" || message.trim() === "") {
     return res.status(400).json({
@@ -26,20 +29,81 @@ async function sendMessage(req, res) {
     });
   }
 
+  const options = {
+    spintax: spintax !== false,
+    simulateTyping: simulateTyping !== false,
+  };
+
+  // Mode asynchronous: langsung kembalikan respon bahwa pesan sedang mengantre
+  if (isAsync === true) {
+    const queuePromise = messageQueue.enqueue({
+      number,
+      message,
+      sender,
+      options,
+    });
+
+    // Tangani proses queue di background
+    queuePromise
+      .then(async (result) => {
+        const logId = await logMessage({
+          messageId: result.messageId,
+          sender: sender || result.sender,
+          number: result.receiver,
+          message: result.message,
+          status: "sent",
+          ack: 1,
+        });
+
+        broadcastMessageSent({
+          messageId: result.messageId,
+          receiver: result.receiver,
+          timestamp: new Date().toISOString(),
+        });
+      })
+      .catch(async (error) => {
+        const formattedNumber = waService.formatNumber(String(number || ""));
+        try {
+          await logMessage({
+            messageId: null,
+            sender: sender || "API",
+            number: formattedNumber || String(number),
+            message: String(message || ""),
+            status: "failed",
+            ack: -1,
+            errorMessage: error.message,
+          });
+        } catch (_) {}
+      });
+
+    return res.status(202).json({
+      success: true,
+      status: "queued",
+      message: "Pesan telah dimasukkan ke dalam antrean pengiriman aman",
+      queueLength: messageQueue.getQueueLength(),
+    });
+  }
+
+  // Mode synchronous (default): menunggu antrean memproses dan mengirimkan pesan
   try {
-    const result = await waService.sendTextMessage(number, message);
+    const result = await messageQueue.enqueue({
+      number,
+      message,
+      sender,
+      options,
+    });
 
     // Simpan log sukses ke database BESERTA message_id dan initial ack
     const logId = await logMessage({
       messageId: result.messageId,
       sender: sender || result.sender,
       number: result.receiver,
-      message,
+      message: result.message,
       status: "sent",
       ack: 1,
     });
 
-    // Broadcast status ke dashboard via socket (tanpa membocorkan isi teks pesan)
+    // Broadcast status ke dashboard via socket
     broadcastMessageSent({
       messageId: result.messageId,
       receiver: result.receiver,
@@ -53,7 +117,8 @@ async function sendMessage(req, res) {
         id: logId,
         messageId: result.messageId,
         receiver: result.receiver,
-        message,
+        message: result.message,
+        originalMessage: result.originalMessage,
         timestamp: result.timestamp,
       },
     });
