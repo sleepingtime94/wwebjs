@@ -95,9 +95,9 @@ async function updateMessageStatusByMessageId(messageId, { status, ack, errorMes
 
     if (updates.length === 0) return;
 
-    params.push(messageId);
+    params.push(messageId, `%${messageId}%`);
     await pool.execute(
-      `UPDATE message_logs SET ${updates.join(", ")} WHERE message_id = ?`,
+      `UPDATE message_logs SET ${updates.join(", ")} WHERE message_id = ? OR message_id LIKE ?`,
       params,
     );
   } catch (err) {

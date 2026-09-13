@@ -25,7 +25,9 @@ Gateway API berbasis Node.js untuk mengirim dan memantau pesan WhatsApp mengguna
   - **Random Jitter Delay**: Jeda acak (misal 3–6 detik) antar pesan agar pola pengiriman terlihat manusiawi.
   - **Spintax Support**: Variasi kata otomatis `{Halo|Hai|Selamat pagi}` untuk menghindari deteksi spam teks identik.
   - **Puppeteer Stealth**: Menghapus flag automation bawaan browser (`AutomationControlled`).
-  - **Rate Limiting**: Pembatasan request per menit (default 30/menit) untuk mencegah flooding.
+- ⚡ **Optimasi Memori Chromium (Resource Blocking)**:
+  - Memblokir pengunduhan media berat (video status, voice notes, audio) dan font eksternal non-esensial via Puppeteer request interception.
+  - Membatasi renderer process (`--renderer-process-limit=2`) dan membatasi V8 heap size (`--max-old-space-size=512`) untuk menghemat konsumsi RAM server hingga 40–60%.
 - 📊 **Logging ke Database**: Log status pengiriman pesan (sent, delivered, read, failed) tersimpan ke MySQL.
 - 🔄 **Auto-Reconnect & Lock Cleanup**: Mekanisme auto-recovery session dan pembersihan file lock Chromium.
 - 🚀 **PM2 Ready**: Dilengkapi konfigurasi cluster single-instance PM2 dan script auto-deploy untuk Ubuntu dan Windows.

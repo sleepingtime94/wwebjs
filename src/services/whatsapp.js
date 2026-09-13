@@ -63,6 +63,16 @@ class WhatsAppService extends EventEmitter {
       "--disable-extensions",
       "--disable-default-apps",
       "--disable-blink-features=AutomationControlled",
+      // Flag optimasi memori & resource Chromium:
+      "--disable-background-networking",
+      "--disable-sync",
+      "--disable-translate",
+      "--metrics-recording-only",
+      "--mute-audio",
+      "--no-default-browser-check",
+      "--safebrowsing-disable-auto-update",
+      "--renderer-process-limit=2",
+      "--js-flags=--max-old-space-size=512",
     ];
 
     if (isLinux) {
@@ -95,6 +105,7 @@ class WhatsAppService extends EventEmitter {
     });
 
     this._setupLogoutOverride();
+    this._setupBrowserHooks();
     this._registerEvents();
 
     this.client.initialize().catch((err) => {
@@ -103,6 +114,53 @@ class WhatsAppService extends EventEmitter {
     });
 
     return this.client;
+  }
+
+  _setupBrowserHooks() {
+    const originalAfterBrowserInit = this.client.authStrategy.afterBrowserInitialized.bind(
+      this.client.authStrategy
+    );
+    this.client.authStrategy.afterBrowserInitialized = async () => {
+      await originalAfterBrowserInit();
+      if (this.client.pupPage) {
+        await this._setupResourceBlocking(this.client.pupPage);
+      }
+    };
+  }
+
+  async _setupResourceBlocking(page) {
+    if (!page) return;
+    try {
+      await page.setRequestInterception(true);
+      page.on("request", (req) => {
+        const resourceType = req.resourceType();
+        const url = req.url();
+
+        // 1. Blokir media berat: video dan audio (status, voice notes, video streams)
+        if (resourceType === "media") {
+          return req.abort();
+        }
+
+        // 2. Blokir font eksternal non-esensial (hemat font cache buffer)
+        if (resourceType === "font") {
+          return req.abort();
+        }
+
+        // 3. Blokir tracker / telemetri analitik
+        if (
+          url.includes("google-analytics") ||
+          url.includes("doubleclick") ||
+          url.includes("crashlytics")
+        ) {
+          return req.abort();
+        }
+
+        req.continue();
+      });
+      console.log("[WA:Memory] Resource blocking aktif (media, font eksternal, tracker diblokir).");
+    } catch (err) {
+      console.warn("[WA:Memory] Gagal mengaktifkan resource blocking:", err.message);
+    }
   }
 
   _setupLogoutOverride() {
@@ -332,7 +390,13 @@ class WhatsAppService extends EventEmitter {
 
     // 3. Kirim pesan dan tangkap objek Message
     const sentMessage = await this.client.sendMessage(chatId, finalMessage);
-    const messageId = sentMessage?.id?._serialized || sentMessage?.id?.id || null;
+    const messageId =
+      sentMessage?.id?._serialized ||
+      sentMessage?.id?.id ||
+      (typeof sentMessage?.id === "string" ? sentMessage.id : null) ||
+      sentMessage?._data?.id?._serialized ||
+      sentMessage?._data?.id?.id ||
+      null;
 
     return {
       messageId,
