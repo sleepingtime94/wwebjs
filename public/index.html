@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Gateway</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="app-wrapper">
+    <!-- Green header bar -->
+    <div class="green-strip"></div>
+
+    <!-- Main QR Card Container -->
+    <main class="qr-container">
+      <div class="qr-card">
+        <!-- Left Side: Instructions -->
+        <div class="qr-instructions">
+          <div class="brand">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="#00a884">
+              <path d="M12.031 2C6.479 2 2 6.47 2 12.029c0 1.91.533 3.702 1.458 5.237L2 22l4.896-1.28c1.472.802 3.155 1.258 4.945 1.258 5.552 0 10.031-4.47 10.031-10.029S17.583 2 12.031 2zm0 18.06c-1.724 0-3.413-.464-4.89-1.343l-.35-.208-2.906.76.772-2.833-.228-.363c-.96-1.53-1.468-3.3-1.468-5.138 0-4.992 4.073-9.053 9.07-9.053 4.997 0 9.07 4.06 9.07 9.053s-4.073 9.053-9.07 9.053z"/>
+            </svg>
+            <span>WhatsApp Gateway</span>
+          </div>
+          
+          <h1 class="qr-title">Gunakan WhatsApp di komputer Anda</h1>
+          
+          <ol class="qr-steps">
+            <li>Buka WhatsApp di telepon Anda.</li>
+            <li>Ketuk <strong>Menu</strong> <svg viewBox="0 0 24 24" width="18" height="18" style="display:inline;vertical-align:middle;margin:0 2px;"><path fill="currentColor" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg> atau <strong>Setelan</strong> <svg viewBox="0 0 24 24" width="18" height="18" style="display:inline;vertical-align:middle;margin:0 2px;"><path fill="currentColor" d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z"/></svg> dan pilih <strong>Perangkat Tertaut</strong>.</li>
+            <li>Ketuk <strong>Tautkan perangkat</strong>.</li>
+            <li>Arahkan telepon Anda ke layar ini untuk memindai kode QR.</li>
+          </ol>
+          
+          <!-- Connection Status Info -->
+          <div class="status-footer">
+            <div id="status-badge" class="badge badge-initializing">
+              <span class="badge-dot"></span>
+              <span id="status-text">Menghubungkan ke server...</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Right Side: QR Code Area -->
+        <div class="qr-visualizer">
+          <!-- Loading State -->
+          <div id="qr-loading" class="qr-state">
+            <div class="spinner-wa"></div>
+            <p>Memuat kode QR...</p>
+          </div>
+          
+          <!-- Image State -->
+          <img id="qr-image" class="qr-image hidden" alt="WhatsApp QR Code" />
+          
+          <!-- Ready/Success State -->
+          <div id="qr-ready" class="qr-state hidden">
+            <div class="checkmark-circle">✓</div>
+            <h3>Terhubung!</h3>
+            <p>WhatsApp Gateway siap digunakan.</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const statusBadge = document.getElementById("status-badge");
+    const statusText = document.getElementById("status-text");
+    const qrLoading = document.getElementById("qr-loading");
+    const qrImage = document.getElementById("qr-image");
+    const qrReady = document.getElementById("qr-ready");
+
+    socket.on("status", ({ status, qr }) => {
+      updateStatus(status);
+      if (status === "qr" && qr) {
+        showQR(qr);
+      } else if (status === "ready") {
+        showReady();
+      } else if (status === "disconnected" || status === "initializing") {
+        showLoading(status === "disconnected" ? "Terputus. Mencoba menghubungkan kembali..." : "Menghubungkan ke WhatsApp...");
+      }
+    });
+
+    const statusMap = {
+      initializing: { label: "Inisialisasi", cls: "badge-initializing" },
+      qr: { label: "Scan QR Code", cls: "badge-qr" },
+      authenticated: { label: "Autentikasi", cls: "badge-authenticated" },
+      ready: { label: "Terhubung", cls: "badge-ready" },
+      disconnected: { label: "Terputus", cls: "badge-disconnected" },
+      auth_failure: { label: "Gagal Autentikasi", cls: "badge-disconnected" },
+    };
+
+    function updateStatus(status) {
+      const s = statusMap[status] || { label: status, cls: "badge-initializing" };
+      statusBadge.className = `badge ${s.cls}`;
+      statusText.textContent = s.label;
+    }
+
+    function showQR(src) {
+      qrLoading.classList.add("hidden");
+      qrReady.classList.add("hidden");
+      qrImage.src = src;
+      qrImage.classList.remove("hidden");
+    }
+
+    function showReady() {
+      qrLoading.classList.add("hidden");
+      qrImage.classList.add("hidden");
+      qrReady.classList.remove("hidden");
+    }
+
+    function showLoading(msg) {
+      qrLoading.classList.remove("hidden");
+      const textElem = qrLoading.querySelector("p");
+      if (textElem) textElem.textContent = msg || "Memuat kode QR...";
+      qrImage.classList.add("hidden");
+      qrReady.classList.add("hidden");
+    }
+  </script>
+</body>
+
+</html>

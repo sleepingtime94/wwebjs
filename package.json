@@ -1,0 +1,24 @@
+{
+  "name": "wwebjs-gateway",
+  "version": "1.0.0",
+  "description": "WhatsApp Gateway API using whatsapp-web.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:restart": "pm2 restart wa-gateway",
+    "pm2:stop": "pm2 stop wa-gateway",
+    "pm2:logs": "pm2 logs wa-gateway",
+    "pm2:save": "pm2 save"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mysql2": "^3.18.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}
