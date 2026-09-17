@@ -20,6 +20,84 @@ class WhatsAppService extends EventEmitter {
     };
   }
 
+  _getSystemChromeCandidates() {
+    const candidates = [];
+    if (process.platform === "win32") {
+      const programFiles = process.env.PROGRAMFILES || "C:\\Program Files";
+      const programFilesX86 = process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
+      const localAppData = process.env.LOCALAPPDATA || "";
+      candidates.push(
+        path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(programFiles, "Chromium", "Application", "chrome.exe"),
+        path.join(programFilesX86, "Chromium", "Application", "chrome.exe"),
+        path.join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
+      );
+      if (localAppData) {
+        candidates.push(
+          path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+          path.join(localAppData, "Chromium", "Application", "chrome.exe")
+        );
+      }
+    } else if (process.platform === "darwin") {
+      candidates.push(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+      );
+    } else {
+      // Linux / lainnya
+      candidates.push(
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/snap/bin/chromium",
+        "/usr/bin/chrome",
+        "/opt/google/chrome/chrome"
+      );
+    }
+    return candidates;
+  }
+
+  _resolveChromiumExecutable() {
+    // 1. Prioritas: PUPPETEER_EXECUTABLE_PATH dari .env (jika file-nya benar-benar ada)
+    const customPath = (config.puppeteerExecutablePath || "").trim();
+    if (customPath) {
+      if (fs.existsSync(customPath)) {
+        return { path: customPath, source: "PUPPETEER_EXECUTABLE_PATH (.env)" };
+      }
+      console.warn(`[WA] PUPPETEER_EXECUTABLE_PATH tidak ditemukan: ${customPath} (diabaikan, lanjut auto-detect)`);
+    }
+
+    // 2. Cache bawaan Puppeteer (whatsapp-web.js -> puppeteer)
+    try {
+      const puppeteer = require("puppeteer");
+      const cached = puppeteer.executablePath();
+      if (cached && fs.existsSync(cached)) {
+        return { path: cached, source: "cache bawaan Puppeteer" };
+      }
+      if (cached) {
+        console.warn(`[WA] Cache Puppeteer belum terunduh: ${cached}`);
+      }
+    } catch (e) {
+      console.warn("[WA] Tidak bisa membaca puppeteer.executablePath():", e.message);
+    }
+
+    // 3. Fallback: Chrome/Chromium yang terinstal di sistem (kasus error "Chrome not found")
+    for (const candidate of this._getSystemChromeCandidates()) {
+      try {
+        if (candidate && fs.existsSync(candidate)) {
+          return { path: candidate, source: "Chrome sistem (auto-detect)" };
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
   _cleanupSessionLocks() {
     try {
       const sessionPath = path.join(process.cwd(), ".wwebjs_auth", "session");
@@ -84,9 +162,19 @@ class WhatsAppService extends EventEmitter {
       args: chromeArgs,
     };
 
-    if (config.puppeteerExecutablePath) {
-      puppeteerConfig.executablePath = config.puppeteerExecutablePath;
-      console.log(`[WA] Using custom Chromium: ${config.puppeteerExecutablePath}`);
+    // Auto-detect Chromium executable (perbaikan error "Chrome not found"):
+    // .env -> cache Puppeteer -> Chrome/Chromium sistem
+    const resolved = this._resolveChromiumExecutable();
+    if (resolved) {
+      puppeteerConfig.executablePath = resolved.path;
+      console.log(`[WA] Menggunakan Chromium (${resolved.source}): ${resolved.path}`);
+    } else {
+      console.error(
+        "[WA] Chromium/Chrome tidak ditemukan! Solusi:\n" +
+          "  1) Jalankan: npx puppeteer browsers install chrome\n" +
+          "  2) ATAU install Chrome/Chromium sistem, ATAU\n" +
+          "  3) Set PUPPETEER_EXECUTABLE_PATH di .env ke path chrome.exe/chromium yang valid"
+      );
     }
 
     console.log(`[WA] Platform: ${process.platform} | Headless: true`);
@@ -109,8 +197,15 @@ class WhatsAppService extends EventEmitter {
     this._registerEvents();
 
     this.client.initialize().catch((err) => {
-      console.error("[WA] Client initialization error:", err.message);
-      this._updateStatus("disconnected", { reason: err.message });
+      const msg = err?.message || String(err);
+      console.error("[WA] Client initialization error:", msg);
+      if (/could not find chrome|chrome not found|failed to launch/i.test(msg)) {
+        console.error(
+          "[WA] Perbaikan: jalankan 'npx puppeteer browsers install chrome' " +
+            "atau set PUPPETEER_EXECUTABLE_PATH di .env ke Chrome sistem."
+        );
+      }
+      this._updateStatus("disconnected", { reason: msg });
     });
 
     return this.client;
@@ -218,7 +313,7 @@ class WhatsAppService extends EventEmitter {
         this.state.lastQrDataUrl = qrDataUrl;
         this.state.clientReady = false;
         this._updateStatus("qr", { qr: qrDataUrl });
-        console.log("[WA] QR Code ready to scan via /api/connect");
+        console.log("[WA] QR Code ready to scan via GET /api/qr");
       } catch (err) {
         console.error("[QR] Error generating QR Data URL:", err);
       }
@@ -304,8 +399,7 @@ class WhatsAppService extends EventEmitter {
     }, delayMs);
   }
 
-  formatNumber(number) {
-    if (!number) return "";
+  formatNumber(number) {    if (!number) return "";
     let str = String(number).trim();
 
     // Jika pesan ditujukan untuk grup WhatsApp (@g.us)
@@ -328,6 +422,21 @@ class WhatsAppService extends EventEmitter {
     return formatted;
   }
 
+  // Menjalankan promise dengan batas waktu agar satu panggilan WA yang
+  // macet tidak menahan seluruh antrean selamanya.
+  _withTimeout(promise, ms, label) {
+    const timeoutMs = ms || config.waSendTimeoutMs || 30000;
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Timeout ${label} setelah ${timeoutMs}ms.`);
+        error.statusCode = 503;
+        reject(error);
+      }, timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
   async sendTextMessage(number, message, options = {}) {
     if (!this.state.clientReady || !this.client) {
       const error = new Error("WhatsApp client belum siap. Silakan scan QR code terlebih dahulu.");
@@ -347,7 +456,11 @@ class WhatsAppService extends EventEmitter {
       chatId = formattedNumber;
     } else {
       // Cek apakah nomor terdaftar di WhatsApp
-      const numberId = await this.client.getNumberId(formattedNumber);
+      const numberId = await this._withTimeout(
+        this.client.getNumberId(formattedNumber),
+        null,
+        "cek nomor WhatsApp"
+      );
       if (!numberId) {
         const error = new Error(`Nomor ${formattedNumber} tidak terdaftar di WhatsApp.`);
         error.statusCode = 404;
@@ -366,7 +479,11 @@ class WhatsAppService extends EventEmitter {
     if (config.antiBan?.simulateTyping && options.simulateTyping !== false) {
       try {
         await this.client.sendPresenceAvailable().catch(() => {});
-        const chat = await this.client.getChatById(chatId).catch(() => null);
+        const chat = await this._withTimeout(
+          this.client.getChatById(chatId).catch(() => null),
+          10000,
+          "ambil chat"
+        ).catch(() => null);
         if (chat) {
           // Tandai chat telah dilihat (seen)
           await chat.sendSeen().catch(() => {});
@@ -389,7 +506,11 @@ class WhatsAppService extends EventEmitter {
     console.log(`[WA] Mengirim pesan ke: ${chatId}`);
 
     // 3. Kirim pesan dan tangkap objek Message
-    const sentMessage = await this.client.sendMessage(chatId, finalMessage);
+    const sentMessage = await this._withTimeout(
+      this.client.sendMessage(chatId, finalMessage),
+      null,
+      "kirim pesan"
+    );
     const messageId =
       sentMessage?.id?._serialized ||
       sentMessage?.id?.id ||
@@ -411,6 +532,43 @@ class WhatsAppService extends EventEmitter {
 
   getState() {
     return { ...this.state };
+  }
+
+  // Info akun yang terhubung (null bila belum ready).
+  getAccountInfo() {
+    try {
+      if (!this.state.clientReady || !this.client || !this.client.info) return null;
+      const info = this.client.info;
+      return {
+        phone: info?.wid?.user ?? null,
+        name: info?.pushname ?? null,
+        platform: info?.platform ?? null,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Keluar dari sesi terhubung: membersihkan session .wwebjs_auth lalu
+  // memicu re-inisialisasi otomatis (event "disconnected" LOGOUT -> reconnect),
+  // sehingga QR baru diterbitkan via GET /api/qr.
+  async logout() {
+    this.state.lastQrDataUrl = null;
+    if (!this.client) {
+      this._updateStatus("initializing");
+      this.init();
+      return;
+    }
+    try {
+      await this.client.logout();
+    } catch (err) {
+      console.warn("[WA] Logout gagal, paksa destroy + re-init:", err.message);
+      try {
+        await this.destroy();
+      } catch (_) {}
+      this._updateStatus("initializing");
+      this.init();
+    }
   }
 
   async destroy() {

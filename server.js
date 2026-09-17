@@ -1,41 +1,63 @@
 const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
 const cors = require("cors");
 
 const config = require("./src/config");
-const { initDatabase } = require("./src/db");
+const { initDatabase, pool } = require("./src/db");
 const waService = require("./src/services/whatsapp");
-const { initSocket } = require("./src/services/socket");
+const messageQueue = require("./src/services/messageQueue");
 const apiRouter = require("./src/routes/api");
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+const corsOptions = config.corsOrigin
+  ? { origin: config.corsOrigin.split(",").map((s) => s.trim()).filter(Boolean) }
+  : {};
+app.use(cors(corsOptions));
+app.use(express.json({ limit: config.jsonLimit }));
 
-// Static Files & Dashboard
-app.use("/api", express.static(path.join(__dirname, "public")));
+// REST API (seluruh endpoint di bawah /api diproteksi API key)
 app.use("/api", apiRouter);
 
-// Root redirect
+// Health check tanpa auth (untuk Docker/K8s & monitoring).
+// Selalu 200 selama proses hidup; kondisi komponen ada di body.
+app.get("/health", async (req, res) => {
+  let dbUp = false;
+  try {
+    await pool.query("SELECT 1");
+    dbUp = true;
+  } catch (_) {
+    dbUp = false;
+  }
+  const waState = waService.getState();
+  res.json({
+    success: true,
+    service: "wwebjs-gateway",
+    wa: { status: waState.currentStatus, ready: waState.clientReady },
+    db: { up: dbUp },
+    queue: messageQueue.getStats(),
+  });
+});
+
+// Root: info service (REST only, tanpa dashboard HTML)
 app.get("/", (req, res) => {
-  res.redirect(301, config.mainPage);
+  res.json({
+    success: true,
+    service: "wwebjs-gateway",
+    status: waService.getState().currentStatus,
+    endpoints: ["GET /api/status", "GET /api/qr", "POST /api/logout", "POST /api/send-message"],
+  });
 });
 
 // Setup Services
-initSocket(io);
 waService.init();
 
 // Server Startup
-server.listen(config.port, async () => {
+app.listen(config.port, async () => {
   console.log(`🚀 Server running on port ${config.port}`);
-  console.log(`📱 Scan QR code via /api/connect`);
+  console.log(`📱 Scan QR code via GET /api/qr (header x-api-key)`);
   await initDatabase();
+  await messageQueue.recover();
 });
 
 // Process Error Handling

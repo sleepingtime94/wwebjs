@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.git
+.gitignore
+.env
+.env.*.local
+.wwebjs_auth
+.wwebjs_cache
+logs
+*.log
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+check-*.js

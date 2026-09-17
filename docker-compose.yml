@@ -1,0 +1,65 @@
+# Stack: wa-gateway (Node 20 + Chrome headless, port 3000) + MySQL 8.0
+# DB internal: app terhubung via host `mysql` (lihat environment DB_HOST di bawah).
+# Pakai DB eksternal? Set DB_HOST eksternal & hentikan service mysql:
+#   docker compose stop mysql  # + sesuaikan DB_HOST/DB_USER/DB_PASS di .env
+services:
+  wa-gateway:
+    build: .
+    container_name: wa-gateway
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      # Override koneksi DB agar mengarah ke service mysql internal
+      # (menang atas DB_HOST=localhost dari .env contoh).
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-whatsapp}
+      DB_USER: ${DB_USER:-wa_user}
+      DB_PASS: ${DB_PASS:-changeme}
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
+    volumes:
+      # Persist session WhatsApp agar tidak scan QR ulang tiap restart/rebuild
+      - ./.wwebjs_auth:/app/.wwebjs_auth
+      - ./.wwebjs_cache:/app/.wwebjs_cache
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: wa-mysql
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-whatsapp}
+      MYSQL_USER: ${DB_USER:-wa_user}
+      MYSQL_PASSWORD: ${DB_PASS:-changeme}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Skema awal (opsional): app juga auto-create tabel saat start,
+      # uncomment baris berikut jika ingin init via logs.sql:
+      # - ./logs.sql:/docker-entrypoint-initdb.d/01-logs.sql:ro
+    # Port MySQL TIDAK dipublish ke host (hanya bisa diakses antar-service).
+    # Butuh akses dari luar? Gunakan: "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

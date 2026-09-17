@@ -30,6 +30,11 @@ mkdir -p logs
 echo "📦 [NPM] Menginstal dependensi npm (production)..."
 npm install --omit=dev
 
+# 4b. Pastikan browser Chrome Puppeteer tersedia (perbaikan "Chrome not found").
+# Jika server memakai Chrome sistem, cukup set PUPPETEER_EXECUTABLE_PATH di .env.
+echo "🌐 [CHROME] Memastikan browser Chrome Puppeteer tersedia..."
+npx puppeteer browsers install chrome || echo "⚠️ [CHROME] Warning: Gagal mengunduh Chrome Puppeteer. Aplikasi akan fallback ke Chrome sistem jika ada."
+
 # 5. Restart atau Start PM2
 echo "🔄 [PM2] Memperbarui proses di PM2..."
 if pm2 describe wa-gateway > /dev/null 2>&1; then

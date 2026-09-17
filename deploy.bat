@@ -31,6 +31,13 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
+:: 4b. Pastikan browser Chrome Puppeteer tersedia (perbaikan "Chrome not found")
+echo [DEPLOY] Memastikan browser Chrome Puppeteer tersedia...
+call npx puppeteer browsers install chrome
+if %ERRORLEVEL% neq 0 (
+    echo [WARN] Gagal mengunduh Chrome Puppeteer. Aplikasi akan fallback ke Chrome sistem jika ada.
+)
+
 :: 5. Restart atau Start PM2
 echo [DEPLOY] Memperbarui proses di PM2...
 call pm2 describe wa-gateway >nul 2>&1

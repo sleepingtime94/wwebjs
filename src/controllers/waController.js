@@ -1,12 +1,7 @@
-const path = require("path");
 const waService = require("../services/whatsapp");
 const messageQueue = require("../services/messageQueue");
-const { broadcastMessageSent } = require("../services/socket");
 const { logMessage } = require("../db");
-
-async function renderConnectPage(req, res) {
-  res.sendFile(path.join(__dirname, "../../public/index.html"));
-}
+const config = require("../config");
 
 async function getStatus(req, res) {
   const state = waService.getState();
@@ -15,8 +10,67 @@ async function getStatus(req, res) {
     success: true,
     status: state.currentStatus,
     ready: state.clientReady,
+    me: waService.getAccountInfo(),
     queue: queueStats,
   });
+}
+
+// GET /api/qr — ambil QR code untuk ditautkan via REST (tanpa halaman HTML).
+// Query: ?format=json (default, {success, qr dataURL}) | ?format=png (image/png)
+async function getQr(req, res) {
+  const state = waService.getState();
+
+  if (state.clientReady) {
+    return res.status(409).json({
+      success: false,
+      status: state.currentStatus,
+      ready: true,
+      message: "WhatsApp sudah terhubung, tidak perlu scan QR.",
+    });
+  }
+
+  if (state.currentStatus !== "qr" || !state.lastQrDataUrl) {
+    return res.status(404).json({
+      success: false,
+      status: state.currentStatus,
+      ready: false,
+      message: "QR code belum tersedia. Coba lagi beberapa detik.",
+    });
+  }
+
+  if ((req.query.format || "json").toLowerCase() === "png") {
+    const match = state.lastQrDataUrl.match(/^data:image\/png;base64,(.+)$/);
+    if (!match) {
+      return res.status(500).json({ success: false, message: "Format QR internal tidak valid." });
+    }
+    const buffer = Buffer.from(match[1], "base64");
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(buffer);
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    success: true,
+    status: state.currentStatus,
+    qr: state.lastQrDataUrl,
+  });
+}
+
+// POST /api/logout — putuskan sesi & minta QR baru (tanpa dashboard HTML).
+async function logout(req, res) {
+  try {
+    await waService.logout();
+    const state = waService.getState();
+    res.json({
+      success: true,
+      message: "Berhasil logout. Silakan scan QR baru via GET /api/qr.",
+      status: state.currentStatus,
+    });
+  } catch (error) {
+    console.error("[API] Logout error:", error.message);
+    res.status(500).json({ success: false, message: "Gagal logout.", error: error.message });
+  }
 }
 
 async function sendMessage(req, res) {
@@ -29,6 +83,18 @@ async function sendMessage(req, res) {
     });
   }
 
+  if (message.length > config.messageMaxLength) {
+    return res.status(400).json({
+      success: false,
+      message: `Panjang pesan melebihi batas ${config.messageMaxLength} karakter`,
+    });
+  }
+
+  const safeSender =
+    typeof sender === "string" && sender.length > config.senderMaxLength
+      ? sender.slice(0, config.senderMaxLength)
+      : sender;
+
   const options = {
     spintax: spintax !== false,
     simulateTyping: simulateTyping !== false,
@@ -36,29 +102,31 @@ async function sendMessage(req, res) {
 
   // Mode asynchronous: langsung kembalikan respon bahwa pesan sedang mengantre
   if (isAsync === true) {
-    const queuePromise = messageQueue.enqueue({
-      number,
-      message,
-      sender,
-      options,
-    });
+    let queuePromise;
+    try {
+      queuePromise = messageQueue.enqueue({
+        number,
+        message,
+        sender: safeSender,
+        options,
+      });
+    } catch (err) {
+      return res.status(err.statusCode || 503).json({
+        success: false,
+        message: err.message,
+      });
+    }
 
     // Tangani proses queue di background
     queuePromise
       .then(async (result) => {
-        const logId = await logMessage({
+        await logMessage({
           messageId: result.messageId,
-          sender: sender || result.sender,
+          sender: safeSender || result.sender,
           number: result.receiver,
           message: result.message,
           status: "sent",
           ack: 1,
-        });
-
-        broadcastMessageSent({
-          messageId: result.messageId,
-          receiver: result.receiver,
-          timestamp: new Date().toISOString(),
         });
       })
       .catch(async (error) => {
@@ -66,7 +134,7 @@ async function sendMessage(req, res) {
         try {
           await logMessage({
             messageId: null,
-            sender: sender || "API",
+            sender: safeSender || "API",
             number: formattedNumber || String(number),
             message: String(message || ""),
             status: "failed",
@@ -89,25 +157,18 @@ async function sendMessage(req, res) {
     const result = await messageQueue.enqueue({
       number,
       message,
-      sender,
+      sender: safeSender,
       options,
     });
 
     // Simpan log sukses ke database BESERTA message_id dan initial ack
     const logId = await logMessage({
       messageId: result.messageId,
-      sender: sender || result.sender,
+      sender: safeSender || result.sender,
       number: result.receiver,
       message: result.message,
       status: "sent",
       ack: 1,
-    });
-
-    // Broadcast status ke dashboard via socket
-    broadcastMessageSent({
-      messageId: result.messageId,
-      receiver: result.receiver,
-      timestamp: new Date().toISOString(),
     });
 
     res.json({
@@ -132,7 +193,7 @@ async function sendMessage(req, res) {
     try {
       await logMessage({
         messageId: null,
-        sender: sender || "API",
+        sender: safeSender || "API",
         number: formattedNumber || String(number),
         message: String(message || ""),
         status: "failed",
@@ -151,4 +212,4 @@ async function sendMessage(req, res) {
   }
 }
 
-module.exports = { renderConnectPage, getStatus, sendMessage };
+module.exports = { getStatus, getQr, logout, sendMessage };
