@@ -4,9 +4,9 @@ FROM node:20-slim
 ENV NODE_ENV=production \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 
-# Dependensi sistem untuk Google Chrome headless + whatsapp-web.js
+# Dependensi sistem untuk Google Chrome headless + whatsapp-web.js + tini (init PID 1)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget gnupg ca-certificates fonts-liberation \
+    wget gnupg ca-certificates fonts-liberation tini \
     libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 \
     libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc-s1 \
     libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
@@ -32,13 +32,21 @@ RUN npm ci --omit=dev
 COPY server.js ecosystem.config.js logs.sql ./
 COPY src ./src
 
-# Folder runtime yang dipersist via volume
-RUN mkdir -p .wwebjs_auth .wwebjs_cache logs
+# Folder runtime yang dipersist via volume.
+# sessions -> symlink backward-compat agar mount lama
+#   -v wwebjs-session:/app/sessions tetap terbaca
+# Path asli session: /app/.wwebjs_auth (LocalAuth default)
+RUN mkdir -p .wwebjs_auth .wwebjs_cache logs sessions \
+  && ln -sfn .wwebjs_auth sessions
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=60s \
   CMD node -e "fetch('http://localhost:' + (process.env.PORT || 3000) + '/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
+
+# tini sebagai PID 1 agar SIGTERM/SIGINT diteruskan ke node (graceful shutdown server.js)
+# sehingga tidak wajib pakai flag --init saat docker run (sering diblokir hosting).
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Single instance (session WA tidak bisa paralel) — PM2 tidak dipakai di container
 CMD ["node", "server.js"]

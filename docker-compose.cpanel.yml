@@ -1,0 +1,41 @@
+# Deploy khusus cPanel/shared hosting TANPA sudo.
+# - 1 service saja (wa-gateway), TANPA service mysql internal.
+# - DB memakai MySQL hosting yang sama dengan aplikasi lain (lihat .env: DB_HOST).
+# - Hanya publish port 3000 (sesuai WA_API_URL=http://127.0.0.1:3000 di app lain).
+# Pakai: docker compose -f docker-compose.cpanel.yml up -d --build
+# Atau cukup: ./deploy-cpanel.sh
+services:
+  wa-gateway:
+    build: .
+    image: wwebjs
+    container_name: wwebjs
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
+    # Agar DB_HOST=host.docker.internal tembus ke MySQL di host.
+    # DB user sudah remote-ok (bisa diremote dari luar), jadi grant TCP lolos.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Path asli session: /app/.wwebjs_auth (LocalAuth default).
+      # Named volume agar survive rebuild + aman dari masalah permission UID di hosting.
+      - wwebjs-session:/app/.wwebjs_auth
+      - wwebjs-cache:/app/.wwebjs_cache
+    init: true
+    shm_size: 2g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  wwebjs-session:
+  wwebjs-cache:
