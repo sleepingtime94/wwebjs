@@ -19,6 +19,7 @@
 #   bash deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
 #   bash deploy-cpanel.sh logs      # ikuti log
 #   bash deploy-cpanel.sh status    # status + cek /health + /api/status
+#   bash deploy-cpanel.sh unlock    # DARURAT: hapus stale Chrome lock (error "profile in use") tanpa hapus session
 #   bash deploy-cpanel.sh restart   # restart container
 #   bash deploy-cpanel.sh down      # hentikan (volume session tetap)
 
@@ -192,6 +193,18 @@ case "${1:-up}" in
   rebuild)
     check_docker; setup_env; do_build_nocache; do_up; wait_healthy; show_info ;;
   logs) compose logs -f wa-gateway ;;
+  unlock)
+    # Darurat error "profile appears to be in use": hapus file lock Chrome
+    # (Singleton*) di volume TANPA menghapus session (tidak perlu scan QR ulang).
+    # Dijalankan via container sekali-pakai dari image sendiri (pasti ada).
+    log "🔓 [UNLOCK] Menghentikan container dulu agar lock tidak dipegang Chrome..."
+    compose stop wa-gateway 2>/dev/null || docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    log "🔓 [UNLOCK] Menghapus stale lock files di volume wwebjs-session..."
+    docker run --rm -v wwebjs-session:/vol "$IMAGE_NAME" \
+      sh -c 'rm -f /vol/session/SingletonLock /vol/session/SingletonCookie /vol/session/SingletonSocket /vol/session/parent.lock; rm -f /vol/session-*/SingletonLock /vol/session-*/SingletonCookie /vol/session-*/SingletonSocket /vol/session-*/parent.lock; echo cleaned' \
+      || die "Gagal membersihkan lock. Pastikan image $IMAGE_NAME sudah pernah di-build."
+    log "🚀 [UNLOCK] Menyalakan kembali..."
+    compose up -d; wait_healthy; show_info ;;
   restart) compose restart; show_info ;;
   status)
     compose ps
@@ -202,7 +215,7 @@ case "${1:-up}" in
   -h|--help|help)
     echo "Pakai SATU perintah: bash deploy-cpanel.sh"
     echo "Update kode + deploy: bash deploy-cpanel.sh update"
-    echo "Opsi: bash deploy-cpanel.sh [up|update|rebuild|logs|status|restart|down]"
+    echo "Opsi: bash deploy-cpanel.sh [up|update|rebuild|unlock|logs|status|restart|down]"
     ;;
   *) die "Argumen tidak dikenal: $1 (lihat bash deploy-cpanel.sh --help)" ;;
 esac

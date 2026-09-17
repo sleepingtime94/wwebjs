@@ -18,6 +18,8 @@ class WhatsAppService extends EventEmitter {
       currentStatus: "initializing",
       lastQrDataUrl: null,
     };
+    // Hitungan retry khusus error "profile in use" (anti infinite loop).
+    this.initRetryCount = 0;
   }
 
   _getSystemChromeCandidates() {
@@ -99,21 +101,40 @@ class WhatsAppService extends EventEmitter {
   }
 
   _cleanupSessionLocks() {
+    // PENTING: jangan pakai fs.existsSync() di sini. SingletonLock Chrome
+    // di Linux adalah symlink yang jadi dangling setelah container recreate,
+    // dan existsSync() selalu false untuk symlink dangling — lock tidak
+    // pernah terhapus (bug lama penyebab "profile appears to be in use").
+    // Pakai lstatSync (tidak follow symlink) + rmSync force.
     try {
-      const sessionPath = path.join(process.cwd(), ".wwebjs_auth", "session");
-      if (fs.existsSync(sessionPath)) {
-        const lockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock"];
+      const authBase = path.join(process.cwd(), ".wwebjs_auth");
+      let entries;
+      try {
+        entries = fs.readdirSync(authBase);
+      } catch (_) {
+        return; // folder belum ada (fresh install) — tidak ada yang dibersihkan
+      }
+      const lockFiles = ["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock"];
+      const removed = [];
+      for (const entry of entries) {
+        if (entry !== "session" && !entry.startsWith("session-")) continue;
         for (const file of lockFiles) {
-          const filePath = path.join(sessionPath, file);
-          if (fs.existsSync(filePath)) {
-            try {
-              fs.unlinkSync(filePath);
-              console.log(`[WA] Cleaned up stale lock file: ${file}`);
-            } catch (e) {
-              console.warn(`[WA] Non-fatal: could not remove ${file}:`, e.message);
-            }
+          const filePath = path.join(authBase, entry, file);
+          try {
+            fs.lstatSync(filePath); // ada (file/socket/symlink, bahkan dangling)
+          } catch (_) {
+            continue; // memang tidak ada — lewati
+          }
+          try {
+            fs.rmSync(filePath, { force: true });
+            removed.push(`${entry}/${file}`);
+          } catch (e) {
+            console.warn(`[WA] Non-fatal: could not remove ${entry}/${file}:`, e.message);
           }
         }
+      }
+      if (removed.length) {
+        console.log(`[WA] Cleaned up stale lock files: ${removed.join(", ")}`);
       }
     } catch (err) {
       console.warn("[WA] Lock cleanup check warning:", err.message);
@@ -199,7 +220,25 @@ class WhatsAppService extends EventEmitter {
     this.client.initialize().catch((err) => {
       const msg = err?.message || String(err);
       console.error("[WA] Client initialization error:", msg);
-      if (/could not find chrome|chrome not found|failed to launch/i.test(msg)) {
+      // Kasus "profile appears to be in use": sisa lock container sebelumnya.
+      // Bersihkan lalu coba ulang otomatis (max 5x). Tanpa ini app stuck
+      // di status disconnected selamanya sampai restart manual.
+      if (/profile.*in use|singleton|locked/i.test(msg)) {
+        this._cleanupSessionLocks();
+        this.initRetryCount += 1;
+        if (this.initRetryCount <= 5) {
+          console.error(
+            `[WA] Session profile terkunci — retry ${this.initRetryCount}/5 setelah cleanup...`
+          );
+          this._updateStatus("reconnecting", { reason: msg, attempt: this.initRetryCount });
+          this.reconnect(8000);
+          return;
+        }
+        console.error(
+          "[WA] Gagal 5x berturut-turut. Kemungkinan 2 instance berjalan " +
+            "dengan volume session yang sama — hentikan salah satunya."
+        );
+      } else if (/could not find chrome|chrome not found|failed to launch/i.test(msg)) {
         console.error(
           "[WA] Perbaikan: jalankan 'npx puppeteer browsers install chrome' " +
             "atau set PUPPETEER_EXECUTABLE_PATH di .env ke Chrome sistem."
@@ -335,6 +374,7 @@ class WhatsAppService extends EventEmitter {
     this.client.on("ready", () => {
       this.state.clientReady = true;
       this.state.lastQrDataUrl = null;
+      this.initRetryCount = 0; // sukses — reset hitungan retry lock
       this._updateStatus("ready");
       console.log("[WA] Client is ready & synchronized!");
     });
