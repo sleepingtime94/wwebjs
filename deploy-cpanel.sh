@@ -15,6 +15,7 @@
 #   5. tunggu /health + tampilkan cara scan QR
 #
 # Perintah lain (semua via 'bash' agar lolos noexec):
+#   bash deploy-cpanel.sh update    # git pull + build + restart (pakai ini setelah ada update)
 #   bash deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
 #   bash deploy-cpanel.sh logs      # ikuti log
 #   bash deploy-cpanel.sh status    # status + cek /health + /api/status
@@ -160,8 +161,34 @@ cmd_install() {
   show_info
 }
 
+do_git_pull() {
+  if [ ! -d ".git" ]; then
+    log "ℹ️  [GIT] Bukan repo git (.git tidak ada) — lewati pull."
+    return 0
+  fi
+  need_cmd git || die "git tidak ditemukan, tidak bisa update."
+  log "📦 [GIT] Menarik perubahan terbaru..."
+  if git pull --ff-only 2>/dev/null; then
+    log "✅ [GIT] $(git log --oneline -1)"
+  else
+    log "⚠️  [GIT] pull --ff-only gagal (mungkin ada perubahan lokal). Coba pull biasa..."
+    git pull || log "⚠️  [GIT] Git pull gagal — lanjut deploy dengan kode yang ada. Selesaikan konflik manual lalu ulangi."
+  fi
+}
+
+cmd_update() {
+  check_docker
+  do_git_pull
+  setup_env
+  do_build
+  do_up
+  wait_healthy
+  show_info
+}
+
 case "${1:-up}" in
   up|install|"") cmd_install ;;
+  update) cmd_update ;;
   rebuild)
     check_docker; setup_env; do_build_nocache; do_up; wait_healthy; show_info ;;
   logs) compose logs -f wa-gateway ;;
@@ -174,7 +201,8 @@ case "${1:-up}" in
   down) compose down; log "🛑 Dihentikan (volume wwebjs-session tetap, session tidak hilang)." ;;
   -h|--help|help)
     echo "Pakai SATU perintah: bash deploy-cpanel.sh"
-    echo "Opsi: bash deploy-cpanel.sh [up|rebuild|logs|status|restart|down]"
+    echo "Update kode + deploy: bash deploy-cpanel.sh update"
+    echo "Opsi: bash deploy-cpanel.sh [up|update|rebuild|logs|status|restart|down]"
     ;;
   *) die "Argumen tidak dikenal: $1 (lihat bash deploy-cpanel.sh --help)" ;;
 esac
