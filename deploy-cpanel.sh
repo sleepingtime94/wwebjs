@@ -2,7 +2,9 @@
 # WhatsApp Gateway — deploy 1 perintah khusus cPanel/shared hosting (TANPA sudo).
 #
 # Cukup jalankan SATU perintah ini di folder projek:
-#   chmod +x deploy-cpanel.sh && ./deploy-cpanel.sh
+#   bash deploy-cpanel.sh
+# (Pakai 'bash ...' bukan './...' karena partisi hosting umumnya noexec
+#  sehingga ./deploy-cpanel.sh -> Permission denied walau sudah chmod +x.)
 #
 # Yang dilakukan otomatis:
 #   1. cek docker + docker compose v2 (TOLAK docker-compose v1 yang rusak libz.so.1)
@@ -12,12 +14,12 @@
 #   4. up container wwebjs port 3000 saja + volume session persisten
 #   5. tunggu /health + tampilkan cara scan QR
 #
-# Perintah lain:
-#   ./deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
-#   ./deploy-cpanel.sh logs      # ikuti log
-#   ./deploy-cpanel.sh status    # status + cek /health + /api/status
-#   ./deploy-cpanel.sh restart   # restart container
-#   ./deploy-cpanel.sh down      # hentikan (volume session tetap)
+# Perintah lain (semua via 'bash' agar lolos noexec):
+#   bash deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
+#   bash deploy-cpanel.sh logs      # ikuti log
+#   bash deploy-cpanel.sh status    # status + cek /health + /api/status
+#   bash deploy-cpanel.sh restart   # restart container
+#   bash deploy-cpanel.sh down      # hentikan (volume session tetap)
 
 APP_PORT="3000"
 COMPOSE_FILE="docker-compose.cpanel.yml"
@@ -83,7 +85,7 @@ setup_env() {
   grep -qE "^DB_USER=" .env || env_set "DB_USER" "gemaantik_root"
   grep -qE "^NODE_ENV=" .env || env_set "NODE_ENV" "production"
   if grep -qE "^(API_KEY=.*(ganti-dengan|your-secret|changeme|12345)|API_KEY=)$" .env; then
-    log "⚠️  [ENV] API_KEY masih default — samakan dengan WA_API_KEY aplikasi satunya, lalu ulangi ./deploy-cpanel.sh"
+    log "⚠️  [ENV] API_KEY masih default — samakan dengan WA_API_KEY aplikasi satunya, lalu ulangi bash deploy-cpanel.sh"
   fi
   log "✅ [ENV] Siap (PORT=$APP_PORT, DB_HOST=$(env_val DB_HOST), DB_NAME=$(env_val DB_NAME))."
 }
@@ -130,7 +132,7 @@ wait_healthy() {
     fi
     sleep 2
   done
-  log "⚠️  [WAIT] Timeout — cek './deploy-cpanel.sh logs'. Container mungkin masih init Chrome/QR."
+  log "⚠️  [WAIT] Timeout — cek 'bash deploy-cpanel.sh logs'. Container mungkin masih init Chrome/QR."
 }
 
 show_info() {
@@ -144,7 +146,7 @@ show_info() {
   echo "📊 Status  : curl http://127.0.0.1:${APP_PORT}/api/status -H \"x-api-key: \$API_KEY\""
   echo "📱 QR JSON : curl http://127.0.0.1:${APP_PORT}/api/qr -H \"x-api-key: \$API_KEY\""
   echo "📱 QR PNG  : curl \"http://127.0.0.1:${APP_PORT}/api/qr?format=png\" -H \"x-api-key: \$API_KEY\" --output qr.png"
-  echo "📜 Log     : ./deploy-cpanel.sh logs"
+  echo "📜 Log     : bash deploy-cpanel.sh logs"
   echo "♻️  Session : volume wwebjs-session (scan QR 1x, survive rebuild/restart)"
   echo "==================================================="
 }
@@ -171,8 +173,8 @@ case "${1:-up}" in
     ;;
   down) compose down; log "🛑 Dihentikan (volume wwebjs-session tetap, session tidak hilang)." ;;
   -h|--help|help)
-    echo "Pakai SATU perintah: chmod +x deploy-cpanel.sh && ./deploy-cpanel.sh"
-    echo "Opsi: ./deploy-cpanel.sh [up|rebuild|logs|status|restart|down]"
+    echo "Pakai SATU perintah: bash deploy-cpanel.sh"
+    echo "Opsi: bash deploy-cpanel.sh [up|rebuild|logs|status|restart|down]"
     ;;
-  *) die "Argumen tidak dikenal: $1 (lihat ./deploy-cpanel.sh --help)" ;;
+  *) die "Argumen tidak dikenal: $1 (lihat bash deploy-cpanel.sh --help)" ;;
 esac
