@@ -2,7 +2,7 @@
 FROM node:20-slim
 
 ENV NODE_ENV=production \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Dependensi sistem untuk Google Chrome headless + whatsapp-web.js + tini (init PID 1)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,14 +29,14 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Salin source aplikasi
-COPY server.js ecosystem.config.js logs.sql ./
+COPY server.js logs.sql ./
 COPY src ./src
 
 # Folder runtime yang dipersist via volume.
 # sessions -> symlink backward-compat agar mount lama
 #   -v wwebjs-session:/app/sessions tetap terbaca
 # Path asli session: /app/.wwebjs_auth (LocalAuth default)
-RUN mkdir -p .wwebjs_auth .wwebjs_cache logs sessions \
+RUN mkdir -p .wwebjs_auth .wwebjs_cache logs \
   && ln -sfn .wwebjs_auth sessions
 
 EXPOSE 3000

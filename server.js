@@ -8,6 +8,7 @@ const messageQueue = require("./src/services/messageQueue");
 const apiRouter = require("./src/routes/api");
 
 const app = express();
+app.disable("x-powered-by");
 
 // Middleware
 const corsOptions = config.corsOrigin

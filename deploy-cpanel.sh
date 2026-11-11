@@ -16,6 +16,7 @@
 #
 # Perintah lain (semua via 'bash' agar lolos noexec):
 #   bash deploy-cpanel.sh update    # git pull + build + restart (pakai ini setelah ada update)
+#   bash deploy-cpanel.sh update-pkg # update whatsapp-web.js ke terbaru + build ulang docker + restart
 #   bash deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
 #   bash deploy-cpanel.sh logs      # ikuti log
 #   bash deploy-cpanel.sh status    # status + cek /health + /api/status
@@ -88,6 +89,11 @@ setup_env() {
   grep -qE "^NODE_ENV=" .env || env_set "NODE_ENV" "production"
   if grep -qE "^(API_KEY=.*(ganti-dengan|your-secret|changeme|12345)|API_KEY=)$" .env; then
     log "⚠️  [ENV] API_KEY masih default — samakan dengan WA_API_KEY aplikasi satunya, lalu ulangi bash deploy-cpanel.sh"
+  fi
+  chmod 600 .env 2>/dev/null || true
+  _key="$(env_val API_KEY)"
+  if [ "${#_key}" -lt 32 ]; then
+    log "⚠️  [ENV] API_KEY < 32 karakter — disarankan key acak panjang (openssl rand -hex 32)."
   fi
   log "✅ [ENV] Siap (PORT=$APP_PORT, DB_HOST=$(env_val DB_HOST), DB_NAME=$(env_val DB_NAME))."
 }
@@ -177,6 +183,36 @@ do_git_pull() {
   fi
 }
 
+do_update_pkg() {
+  log "📦 [PKG] Update whatsapp-web.js ke versi terbaru (package.json + package-lock.json)..."
+  _before="$(grep -o '"whatsapp-web.js": *"[^"]*"' package.json | head -n1)"
+  if need_cmd npm; then
+    npm install whatsapp-web.js@latest --package-lock-only --ignore-scripts --no-audit --no-fund \
+      || die "npm install whatsapp-web.js@latest gagal."
+  else
+    log "ℹ️  [PKG] npm host tidak ada — pakai container node:20-slim sekali-pakai."
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$(pwd)":/app -w /app node:20-slim \
+      npm install whatsapp-web.js@latest --package-lock-only --ignore-scripts --no-audit --no-fund \
+      || die "Update package via docker gagal."
+  fi
+  _after="$(grep -o '"whatsapp-web.js": *"[^"]*"' package.json | head -n1)"
+  log "✅ [PKG] ${_before:-?}  ->  ${_after:-?}"
+}
+
+cmd_update_pkg() {
+  check_docker
+  setup_env
+  # Backup agar bisa rollback otomatis bila update/build gagal
+  cp package.json package.json.bak && cp package-lock.json package-lock.json.bak
+  trap 'if [ -f package.json.bak ]; then mv -f package.json.bak package.json; mv -f package-lock.json.bak package-lock.json; echo "↩️  [PKG] Gagal — package.json & lock dikembalikan." >&2; fi' EXIT
+  do_update_pkg
+  do_build_nocache
+  rm -f package.json.bak package-lock.json.bak
+  trap - EXIT
+  do_up
+  wait_healthy
+  show_info
+}
 cmd_update() {
   check_docker
   do_git_pull
@@ -190,6 +226,7 @@ cmd_update() {
 case "${1:-up}" in
   up|install|"") cmd_install ;;
   update) cmd_update ;;
+  update-pkg|pkg) cmd_update_pkg ;;
   rebuild)
     check_docker; setup_env; do_build_nocache; do_up; wait_healthy; show_info ;;
   logs) compose logs -f wa-gateway ;;
@@ -215,7 +252,7 @@ case "${1:-up}" in
   -h|--help|help)
     echo "Pakai SATU perintah: bash deploy-cpanel.sh"
     echo "Update kode + deploy: bash deploy-cpanel.sh update"
-    echo "Opsi: bash deploy-cpanel.sh [up|update|rebuild|unlock|logs|status|restart|down]"
+    echo "Opsi: bash deploy-cpanel.sh [up|update|update-pkg|rebuild|unlock|logs|status|restart|down]"
     ;;
   *) die "Argumen tidak dikenal: $1 (lihat bash deploy-cpanel.sh --help)" ;;
 esac

@@ -6,12 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "setup:chrome": "npx puppeteer browsers install chrome",
-    "pm2:start": "pm2 start ecosystem.config.js",
-    "pm2:restart": "pm2 restart wa-gateway",
-    "pm2:stop": "pm2 stop wa-gateway",
-    "pm2:logs": "pm2 logs wa-gateway",
-    "pm2:save": "pm2 save"
+    "setup:chrome": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "cors": "^2.8.6",

@@ -439,7 +439,8 @@ class WhatsAppService extends EventEmitter {
     }, delayMs);
   }
 
-  formatNumber(number) {    if (!number) return "";
+  formatNumber(number) {
+    if (!number) return "";
     let str = String(number).trim();
 
     // Jika pesan ditujukan untuk grup WhatsApp (@g.us)

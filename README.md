@@ -31,8 +31,7 @@ Gateway API berbasis Node.js untuk mengirim dan memantau pesan WhatsApp mengguna
 - 📊 **Logging ke Database**: Log status pengiriman pesan (sent, delivered, read, failed) tersimpan ke MySQL.
 - 🏥 **Health Check**: Endpoint `GET /health` tanpa API key untuk Docker/K8s dan monitoring (status WA, DB, antrean).
 - 🔄 **Auto-Reconnect & Lock Cleanup**: Mekanisme auto-recovery session dan pembersihan file lock Chromium.
-- 🐳 **Docker Ready**: `Dockerfile` (Chrome headless bawaan) + `docker-compose.yml` (app + MySQL, port 3000) + `docker.sh` installer server.
-- 🚀 **PM2 Ready**: Dilengkapi konfigurasi cluster single-instance PM2 dan script auto-deploy untuk Ubuntu dan Windows.
+- 🐳 **Docker Ready**: `Dockerfile` (Chrome headless bawaan) + `docker-compose.cpanel.yml` (app saja, DB MySQL eksternal/host, port 3000) + `deploy-cpanel.sh` (deploy 1 perintah).
 
 ---
 
@@ -159,32 +158,16 @@ npm run dev
 npm start
 ```
 
-### 3. Mode PM2 (Process Manager)
-Untuk server production, disarankan menggunakan PM2:
+### 3. Mode Docker (disarankan untuk server, port 3000)
 ```bash
-# Menjalankan service via PM2
-npm run pm2:start
-
-# Memantau log real-time
-npm run pm2:logs
-
-# Merestart service
-npm run pm2:restart
-
-# Menghentikan service
-npm run pm2:stop
+bash deploy-cpanel.sh             # build + jalan (port 3000)
+bash deploy-cpanel.sh update      # git pull + build + restart
+bash deploy-cpanel.sh update-pkg  # update whatsapp-web.js ke terbaru + build ulang + restart
+bash deploy-cpanel.sh logs        # ikuti log
+bash deploy-cpanel.sh status      # status container & /health
+bash deploy-cpanel.sh unlock      # hapus stale Chrome lock tanpa hapus session
 ```
-
-> **Catatan Penting PM2**: Instance pada `ecosystem.config.js` **HARUS bernilai 1** karena satu sesi akun WhatsApp tidak dapat dijalankan secara paralel.
-
-### 4. Mode Docker (disarankan untuk server, port 3000)
-```bash
-chmod +x docker.sh
-./docker.sh          # install Docker bila perlu + build + jalan (app + MySQL)
-./docker.sh logs     # ikuti log gateway
-./docker.sh status   # cek status container & port 3000
-```
-`docker.sh` menyalin `.env.example` → `.env` bila belum ada dan memaksa `PORT=3000`. Session WhatsApp (`.wwebjs_auth`) dan `logs/` dipersist via volume.
+`deploy-cpanel.sh` membuat `.env` dari `.env.example` bila belum ada, memaksa `PORT=3000`, dan memetakan `DB_HOST=localhost` ke `host.docker.internal`. Session WhatsApp dipersist via volume `wwebjs-session`. MySQL tidak termasuk di stack; pakai MySQL host/eksternal.
 
 ---
 
@@ -329,14 +312,11 @@ chmod +x docker.sh
 │   ├── config.js           # Konfigurasi environment variabel
 │   └── db.js               # Inisialisasi pool koneksi MySQL & query log
 ├── Dockerfile              # Image Node 20 + Chrome headless (EXPOSE 3000, HEALTHCHECK /health)
-├── docker-compose.yml      # Stack app + MySQL 8.0 (port 3000, volume session/logs)
-├── docker.sh               # Installer & runner Docker untuk server Ubuntu/Debian
+├── docker-compose.cpanel.yml # Stack Docker (app saja, port 3000, volume session)
+├── deploy-cpanel.sh        # Deploy/update/update-pkg satu perintah via Docker
 ├── .dockerignore           # Daftar file yang dikecualikan dari image Docker
 ├── .env.example            # Template konfigurasi environment
 ├── .gitignore              # Daftar file yang diabaikan Git
-├── deploy.sh               # Script auto-deploy non-Docker untuk Linux (Ubuntu)
-├── deploy.bat              # Script auto-deploy non-Docker untuk Windows
-├── ecosystem.config.js     # Konfigurasi PM2 production
 ├── logs.sql                # Skema database tabel log pesan
 ├── package.json
 ├── README.md
