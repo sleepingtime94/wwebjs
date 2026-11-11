@@ -2,6 +2,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const QRCode = require("qrcode");
 const EventEmitter = require("events");
 const fs = require("fs");
+const { execFileSync } = require("child_process");
 const path = require("path");
 const config = require("../config");
 const { updateMessageStatusByMessageId } = require("../db");
@@ -98,6 +99,23 @@ class WhatsAppService extends EventEmitter {
     }
 
     return null;
+  }
+
+  // User-Agent hardcode versi lama (mis. Chrome/126) membuat WhatsApp Web menganggap browser
+  // usang -> modul internal tidak termuat ("Cannot read properties of null (reading 'Socket')").
+  // Selaraskan versi major UA dengan Chrome yang benar-benar dipakai.
+  _buildUserAgent(executablePath) {
+    let major = 138;
+    try {
+      if (executablePath) {
+        const out = execFileSync(executablePath, ["--version"], { timeout: 8000 }).toString();
+        const m = out.match(/(\d+)\.\d+\.\d+\.\d+/);
+        if (m) major = Number(m[1]);
+      }
+    } catch (e) {
+      console.warn("[WA] Gagal membaca versi Chrome, pakai UA default:", e.message);
+    }
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
   }
 
   _cleanupSessionLocks() {
@@ -200,10 +218,12 @@ class WhatsAppService extends EventEmitter {
 
     console.log(`[WA] Platform: ${process.platform} | Headless: true`);
 
+    const userAgent = this._buildUserAgent(resolved?.path);
+    console.log(`[WA] User-Agent: ${userAgent}`);
+
     this.client = new Client({
       authStrategy: new LocalAuth(),
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      userAgent,
       puppeteer: puppeteerConfig,
       webVersionCache: {
         type: "remote",
@@ -220,6 +240,11 @@ class WhatsAppService extends EventEmitter {
     this.client.initialize().catch((err) => {
       const msg = err?.message || String(err);
       console.error("[WA] Client initialization error:", msg);
+      // Diagnostik: isi halaman WhatsApp Web saat gagal (mis. "browser tidak didukung")
+      Promise.resolve()
+        .then(() => this.client?.pupPage?.evaluate(() => (document.body?.innerText || "").slice(0, 300)))
+        .then((t) => t && console.error("[WA] Isi halaman:", t.replace(/\s+/g, " ")))
+        .catch(() => {});
       // Kasus "profile appears to be in use": sisa lock container sebelumnya.
       // Bersihkan lalu coba ulang otomatis (max 5x). Tanpa ini app stuck
       // di status disconnected selamanya sampai restart manual.

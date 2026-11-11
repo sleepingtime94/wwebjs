@@ -298,7 +298,7 @@ case "${1:-up}" in
   update-pkg|pkg) cmd_update_pkg ;;
   rebuild)
     check_docker; setup_env; do_build_nocache; do_up; wait_healthy; show_info ;;
-  logs) compose logs -f wa-gateway ;;
+  logs) docker logs -f --tail "${2:-200}" "$CONTAINER_NAME" ;;
   unlock)
     # Darurat error "profile appears to be in use": hapus file lock Chrome
     # (Singleton*) di volume TANPA menghapus session (tidak perlu scan QR ulang).
