@@ -65,3 +65,7 @@ $RECYCLE.BIN/
 
 # Temp script deploy
 .env.tmp
+
+# Core dump
+core.*
+build.log

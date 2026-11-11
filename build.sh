@@ -39,9 +39,12 @@ need_cmd() { command -v "$1" >/dev/null 2>&1; }
 # Deteksi plugin 'docker compose' v2 yang BENAR-BENAR berfungsi.
 # (Di sebagian hosting plugin ada tapi rusak: "Invalid Plugins: compose failed to fetch metadata".)
 COMPOSE_OK=0
-if need_cmd docker && docker compose version 2>&1 | grep -qi "compose version"; then
-  COMPOSE_OK=1
-fi
+for _try in 1 2; do
+  if need_cmd docker && docker compose version 2>&1 | grep -qi "compose version"; then
+    COMPOSE_OK=1; break
+  fi
+  sleep 1
+done
 
 # Cari volume existing (compose memberi prefix project, mis. wwebjs_wwebjs-session) agar session tidak hilang.
 find_volume() {
