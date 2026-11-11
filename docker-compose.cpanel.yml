@@ -10,8 +10,7 @@ services:
     image: wwebjs
     container_name: wwebjs
     ports:
-      # Bind ke loopback saja: tidak terekspos ke internet (akses via 127.0.0.1 / reverse proxy)
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     env_file:
       - .env
     environment:
