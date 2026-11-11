@@ -31,7 +31,7 @@ Gateway API berbasis Node.js untuk mengirim dan memantau pesan WhatsApp mengguna
 - 📊 **Logging ke Database**: Log status pengiriman pesan (sent, delivered, read, failed) tersimpan ke MySQL.
 - 🏥 **Health Check**: Endpoint `GET /health` tanpa API key untuk Docker/K8s dan monitoring (status WA, DB, antrean).
 - 🔄 **Auto-Reconnect & Lock Cleanup**: Mekanisme auto-recovery session dan pembersihan file lock Chromium.
-- 🐳 **Docker Ready**: `Dockerfile` (Chrome headless bawaan) + `docker-compose.cpanel.yml` (app saja, DB MySQL eksternal/host, port 3000) + `deploy-cpanel.sh` (deploy 1 perintah).
+- 🐳 **Docker Ready**: `Dockerfile` (Chrome headless bawaan) + `docker-compose.cpanel.yml` (app saja, DB MySQL eksternal/host, port 3000) + `build.sh` (deploy 1 perintah).
 
 ---
 
@@ -160,14 +160,14 @@ npm start
 
 ### 3. Mode Docker (disarankan untuk server, port 3000)
 ```bash
-bash deploy-cpanel.sh             # build + jalan (port 3000)
-bash deploy-cpanel.sh update      # git pull + build + restart
-bash deploy-cpanel.sh update-pkg  # update whatsapp-web.js ke terbaru + build ulang + restart
-bash deploy-cpanel.sh logs        # ikuti log
-bash deploy-cpanel.sh status      # status container & /health
-bash deploy-cpanel.sh unlock      # hapus stale Chrome lock tanpa hapus session
+bash build.sh             # build + jalan (port 3000)
+bash build.sh update      # git pull + build + restart
+bash build.sh update-pkg  # update whatsapp-web.js ke terbaru + build ulang + restart
+bash build.sh logs        # ikuti log
+bash build.sh status      # status container & /health
+bash build.sh unlock      # hapus stale Chrome lock tanpa hapus session
 ```
-`deploy-cpanel.sh` membuat `.env` dari `.env.example` bila belum ada, memaksa `PORT=3000`, dan memetakan `DB_HOST=localhost` ke `host.docker.internal`. Session WhatsApp dipersist via volume `wwebjs-session`. MySQL tidak termasuk di stack; pakai MySQL host/eksternal.
+`build.sh` membuat `.env` dari `.env.example` bila belum ada, memaksa `PORT=3000`, dan memetakan `DB_HOST=localhost` ke `host.docker.internal`. Session WhatsApp dipersist via volume `wwebjs-session`. MySQL tidak termasuk di stack; pakai MySQL host/eksternal.
 
 ---
 
@@ -313,7 +313,7 @@ bash deploy-cpanel.sh unlock      # hapus stale Chrome lock tanpa hapus session
 │   └── db.js               # Inisialisasi pool koneksi MySQL & query log
 ├── Dockerfile              # Image Node 20 + Chrome headless (EXPOSE 3000, HEALTHCHECK /health)
 ├── docker-compose.cpanel.yml # Stack Docker (app saja, port 3000, volume session)
-├── deploy-cpanel.sh        # Deploy/update/update-pkg satu perintah via Docker
+├── build.sh        # Deploy/update/update-pkg satu perintah via Docker
 ├── .dockerignore           # Daftar file yang dikecualikan dari image Docker
 ├── .env.example            # Template konfigurasi environment
 ├── .gitignore              # Daftar file yang diabaikan Git

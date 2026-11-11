@@ -2,9 +2,9 @@
 # WhatsApp Gateway — deploy 1 perintah khusus cPanel/shared hosting (TANPA sudo).
 #
 # Cukup jalankan SATU perintah ini di folder projek:
-#   bash deploy-cpanel.sh
+#   bash build.sh
 # (Pakai 'bash ...' bukan './...' karena partisi hosting umumnya noexec
-#  sehingga ./deploy-cpanel.sh -> Permission denied walau sudah chmod +x.)
+#  sehingga ./build.sh -> Permission denied walau sudah chmod +x.)
 #
 # Yang dilakukan otomatis:
 #   1. cek docker + docker compose v2 (TOLAK docker-compose v1 yang rusak libz.so.1)
@@ -15,14 +15,14 @@
 #   5. tunggu /health + tampilkan cara scan QR
 #
 # Perintah lain (semua via 'bash' agar lolos noexec):
-#   bash deploy-cpanel.sh update    # git pull + build + restart (pakai ini setelah ada update)
-#   bash deploy-cpanel.sh update-pkg # update whatsapp-web.js ke terbaru + build ulang docker + restart
-#   bash deploy-cpanel.sh rebuild   # build ulang tanpa cache + restart
-#   bash deploy-cpanel.sh logs      # ikuti log
-#   bash deploy-cpanel.sh status    # status + cek /health + /api/status
-#   bash deploy-cpanel.sh unlock    # DARURAT: hapus stale Chrome lock (error "profile in use") tanpa hapus session
-#   bash deploy-cpanel.sh restart   # restart container
-#   bash deploy-cpanel.sh down      # hentikan (volume session tetap)
+#   bash build.sh update    # git pull + build + restart (pakai ini setelah ada update)
+#   bash build.sh update-pkg # update whatsapp-web.js ke terbaru + build ulang docker + restart
+#   bash build.sh rebuild   # build ulang tanpa cache + restart
+#   bash build.sh logs      # ikuti log
+#   bash build.sh status    # status + cek /health + /api/status
+#   bash build.sh unlock    # DARURAT: hapus stale Chrome lock (error "profile in use") tanpa hapus session
+#   bash build.sh restart   # restart container
+#   bash build.sh down      # hentikan (volume session tetap)
 
 APP_PORT="3000"
 COMPOSE_FILE="docker-compose.cpanel.yml"
@@ -88,7 +88,7 @@ setup_env() {
   grep -qE "^DB_USER=" .env || env_set "DB_USER" "gemaantik_root"
   grep -qE "^NODE_ENV=" .env || env_set "NODE_ENV" "production"
   if grep -qE "^(API_KEY=.*(ganti-dengan|your-secret|changeme|12345)|API_KEY=)$" .env; then
-    log "⚠️  [ENV] API_KEY masih default — samakan dengan WA_API_KEY aplikasi satunya, lalu ulangi bash deploy-cpanel.sh"
+    log "⚠️  [ENV] API_KEY masih default — samakan dengan WA_API_KEY aplikasi satunya, lalu ulangi bash build.sh"
   fi
   chmod 600 .env 2>/dev/null || true
   _key="$(env_val API_KEY)"
@@ -119,15 +119,37 @@ do_build_nocache() {
   fi
 }
 
+# Hapus container sisa: compose merebut nama lama jadi "<hash12>_wwebjs" saat recreate;
+# bila proses terputus (mis. SSH drop) container itu menetap dan memblokir nama "wwebjs".
+cleanup_stale() {
+  _stale="$(docker ps -a --format '{{.Names}}' | grep -E "^[0-9a-f]{12}_${CONTAINER_NAME}\$" || true)"
+  if [ -n "$_stale" ]; then
+    log "🧹 [CLEAN] Menghapus container sisa: $(echo "$_stale" | tr '\n' ' ')"
+    echo "$_stale" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+}
+
 do_up() {
   log "🚀 [UP] Menjalankan container ${CONTAINER_NAME} (port ${APP_PORT} saja)..."
-  if ! compose up -d; then
-    # Fallback umum di shared hosting: daemon menolak shm_size
-    if compose config 2>&1 | grep -qi "shm"; then
-      log "⚠️  [UP] Gagal, kemungkinan daemon menolak 'shm_size'. Coba hapus baris 'shm_size: 2g' di $COMPOSE_FILE lalu ulangi."
+  cleanup_stale
+  _out="$(mktemp)"
+  if ! compose up -d 2>&1 | tee "$_out"; then :; fi
+  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+    if grep -qi "already in use" "$_out"; then
+      log "⚠️  [UP] Konflik nama container — hapus paksa lalu coba lagi..."
+      compose down --remove-orphans >/dev/null 2>&1 || true
+      cleanup_stale
+      docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+      compose up -d || { rm -f "$_out"; die "compose up gagal. Lihat output di atas."; }
+    else
+      if grep -qi "shm" "$_out"; then
+        log "⚠️  [UP] Daemon menolak 'shm_size'. Hapus baris 'shm_size: 2g' di $COMPOSE_FILE lalu ulangi."
+      fi
+      rm -f "$_out"
+      die "compose up gagal. Lihat output di atas."
     fi
-    die "compose up gagal. Lihat output di atas."
   fi
+  rm -f "$_out"
 }
 
 wait_healthy() {
@@ -140,7 +162,7 @@ wait_healthy() {
     fi
     sleep 2
   done
-  log "⚠️  [WAIT] Timeout — cek 'bash deploy-cpanel.sh logs'. Container mungkin masih init Chrome/QR."
+  log "⚠️  [WAIT] Timeout — cek 'bash build.sh logs'. Container mungkin masih init Chrome/QR."
 }
 
 show_info() {
@@ -154,7 +176,7 @@ show_info() {
   echo "📊 Status  : curl http://127.0.0.1:${APP_PORT}/api/status -H \"x-api-key: \$API_KEY\""
   echo "📱 QR JSON : curl http://127.0.0.1:${APP_PORT}/api/qr -H \"x-api-key: \$API_KEY\""
   echo "📱 QR PNG  : curl \"http://127.0.0.1:${APP_PORT}/api/qr?format=png\" -H \"x-api-key: \$API_KEY\" --output qr.png"
-  echo "📜 Log     : bash deploy-cpanel.sh logs"
+  echo "📜 Log     : bash build.sh logs"
   echo "♻️  Session : volume wwebjs-session (scan QR 1x, survive rebuild/restart)"
   echo "==================================================="
 }
@@ -250,9 +272,9 @@ case "${1:-up}" in
     ;;
   down) compose down; log "🛑 Dihentikan (volume wwebjs-session tetap, session tidak hilang)." ;;
   -h|--help|help)
-    echo "Pakai SATU perintah: bash deploy-cpanel.sh"
-    echo "Update kode + deploy: bash deploy-cpanel.sh update"
-    echo "Opsi: bash deploy-cpanel.sh [up|update|update-pkg|rebuild|unlock|logs|status|restart|down]"
+    echo "Pakai SATU perintah: bash build.sh"
+    echo "Update kode + deploy: bash build.sh update"
+    echo "Opsi: bash build.sh [up|update|update-pkg|rebuild|unlock|logs|status|restart|down]"
     ;;
-  *) die "Argumen tidak dikenal: $1 (lihat bash deploy-cpanel.sh --help)" ;;
+  *) die "Argumen tidak dikenal: $1 (lihat bash build.sh --help)" ;;
 esac

@@ -3,7 +3,7 @@
 # - DB memakai MySQL hosting yang sama dengan aplikasi lain (lihat .env: DB_HOST).
 # - Hanya publish port 3000 (sesuai WA_API_URL=http://127.0.0.1:3000 di app lain).
 # Pakai: docker compose -f docker-compose.cpanel.yml up -d --build
-# Atau cukup: ./deploy-cpanel.sh
+# Atau cukup: ./build.sh
 services:
   wa-gateway:
     build: .
