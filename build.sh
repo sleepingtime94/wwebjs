@@ -36,19 +36,63 @@ need_cmd() { command -v "$1" >/dev/null 2>&1; }
 [ -f "Dockerfile" ] || die "Dockerfile tidak ditemukan. Jalankan dari folder projek wwebjs."
 [ -f "$COMPOSE_FILE" ] || die "$COMPOSE_FILE tidak ditemukan."
 
-# Hanya docker compose v2 (plugin). Jangan pakai docker-compose v1 (rusak di hosting ini).
+# Deteksi plugin 'docker compose' v2 yang BENAR-BENAR berfungsi.
+# (Di sebagian hosting plugin ada tapi rusak: "Invalid Plugins: compose failed to fetch metadata".)
+COMPOSE_OK=0
+if need_cmd docker && docker compose version 2>&1 | grep -qi "compose version"; then
+  COMPOSE_OK=1
+fi
+
+# Cari volume existing (compose memberi prefix project, mis. wwebjs_wwebjs-session) agar session tidak hilang.
+find_volume() {
+  _v="$(docker volume ls -q 2>/dev/null | grep -E "(^|_)$1\$" | head -n1)"
+  echo "${_v:-$1}"
+}
+
+# Fallback tanpa compose: jalankan container persis sesuai $COMPOSE_FILE via 'docker run'.
+run_container() {
+  _sv="$(find_volume wwebjs-session)"; _cv="$(find_volume wwebjs-cache)"
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker volume create "$_sv" >/dev/null; docker volume create "$_cv" >/dev/null
+  log "ℹ️  [UP] docker compose tidak tersedia — pakai 'docker run' (volume: $_sv, $_cv)."
+  set -- -d --name "$CONTAINER_NAME" --restart unless-stopped \
+    -p "${APP_PORT}:3000" --env-file .env \
+    -e PORT=3000 -e NODE_ENV=production -e PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable \
+    --add-host host.docker.internal:host-gateway \
+    -v "$_sv:/app/.wwebjs_auth" -v "$_cv:/app/.wwebjs_cache" \
+    --log-opt max-size=10m --log-opt max-file=3
+  docker run "$@" --shm-size 2g "$IMAGE_NAME" || {
+    log "⚠️  [UP] Gagal dengan --shm-size, coba tanpa..."
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker run "$@" "$IMAGE_NAME"
+  }
+}
+
 compose() {
-  if need_cmd docker && docker compose version >/dev/null 2>&1; then
+  if [ "$COMPOSE_OK" = "1" ]; then
     docker compose -f "$COMPOSE_FILE" "$@"
-  else
-    die "Butuh 'docker compose' v2. Terdeteksi: $(docker compose version 2>&1 || echo 'tidak ada'). Jangan pakai docker-compose v1."
+    return $?
   fi
+  case "$1" in
+    up) run_container ;;
+    ps) docker ps -a --filter "name=^${CONTAINER_NAME}$" ;;
+    logs) docker logs -f "$CONTAINER_NAME" ;;
+    stop) docker stop "$CONTAINER_NAME" ;;
+    restart) docker restart "$CONTAINER_NAME" ;;
+    down) docker rm -f "$CONTAINER_NAME" ;;
+    config) return 0 ;;
+    *) die "Perintah compose '$1' tidak didukung pada mode fallback." ;;
+  esac
 }
 
 check_docker() {
   need_cmd docker || die "docker tidak ditemukan di PATH."
   docker info >/dev/null 2>&1 || die "'docker info' gagal. Pastikan akses docker kamu aktif."
-  log "✅ [DOCKER] $(docker --version) | $(docker compose version)"
+  if [ "$COMPOSE_OK" = "1" ]; then
+    log "✅ [DOCKER] $(docker --version) | $(docker compose version)"
+  else
+    log "⚠️  [DOCKER] $(docker --version) | plugin compose rusak/tidak ada — mode fallback 'docker run'."
+  fi
 }
 
 # Ambil nilai VAR dari .env (tanpa source, aman dari spasi/komentar)
@@ -259,7 +303,7 @@ case "${1:-up}" in
     log "🔓 [UNLOCK] Menghentikan container dulu agar lock tidak dipegang Chrome..."
     compose stop wa-gateway 2>/dev/null || docker stop "$CONTAINER_NAME" 2>/dev/null || true
     log "🔓 [UNLOCK] Menghapus stale lock files di volume wwebjs-session..."
-    docker run --rm -v wwebjs-session:/vol "$IMAGE_NAME" \
+    docker run --rm -v "$(find_volume wwebjs-session):/vol" "$IMAGE_NAME" \
       sh -c 'rm -f /vol/session/SingletonLock /vol/session/SingletonCookie /vol/session/SingletonSocket /vol/session/parent.lock; rm -f /vol/session-*/SingletonLock /vol/session-*/SingletonCookie /vol/session-*/SingletonSocket /vol/session-*/parent.lock; echo cleaned' \
       || die "Gagal membersihkan lock. Pastikan image $IMAGE_NAME sudah pernah di-build."
     log "🚀 [UNLOCK] Menyalakan kembali..."
