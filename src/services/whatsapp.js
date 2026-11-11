@@ -18,6 +18,8 @@ class WhatsAppService extends EventEmitter {
       clientReady: false,
       currentStatus: "initializing",
       lastQrDataUrl: null,
+      lastError: null,
+      startedAt: new Date().toISOString(),
     };
     // Hitungan retry khusus error "profile in use" (anti infinite loop).
     this.initRetryCount = 0;
@@ -279,14 +281,19 @@ class WhatsAppService extends EventEmitter {
             "atau set PUPPETEER_EXECUTABLE_PATH di .env ke Chrome sistem."
         );
       }
-      // Init gagal (mis. browser crash saat re-init setelah logout): coba lagi otomatis
-      // agar tidak stuck "disconnected" tanpa QR.
+      // Init gagal (mis. session korup pasca-logout atau browser crash):
+      // bersihkan session yang korup lalu coba lagi otomatis agar QR baru muncul.
       if (!/profile.*in use|singleton|locked/i.test(msg)) {
         this.initRetryCount += 1;
         if (this.initRetryCount <= 5) {
-          console.error(`[WA] Init gagal — retry ${this.initRetryCount}/5 dalam 10 dtk...`);
+          const shouldClearSession =
+            /socket|waiting failed|timeout|navigation|context|target closed/i.test(msg) ||
+            this.initRetryCount >= 2;
+          console.error(
+            `[WA] Init gagal — retry ${this.initRetryCount}/5 dalam 5 dtk (clearSession=${shouldClearSession})...`
+          );
           this._updateStatus("reconnecting", { reason: msg, attempt: this.initRetryCount });
-          this.reconnect(10000);
+          this.reconnect(5000, { clearSession: shouldClearSession });
           return;
         }
       }
@@ -320,21 +327,12 @@ class WhatsAppService extends EventEmitter {
                 const sock = window.require?.("WAWebSocketModel")?.Socket;
                 const conn = window.require?.("WAWebConnModel")?.Conn;
                 const cmd = window.require?.("WAWebCmd")?.Cmd;
-                return Boolean(
-                  window.Debug?.VERSION &&
-                    sock &&
-                    sock.state &&
-                    sock.state !== "OPENING" &&
-                    sock.state !== "UNLAUNCHED" &&
-                    sock.state !== "PAIRING" &&
-                    conn &&
-                    cmd
-                );
+                return Boolean(window.Debug?.VERSION && sock && sock.state && conn && cmd);
               } catch (_) {
                 return false;
               }
             },
-            { timeout: 60000 }
+            { timeout: 25000 }
           )
           .catch((err) => {
             console.warn("[WA] Menunggu modul WAWebSocketModel timeout/warning:", err.message);
@@ -380,17 +378,29 @@ class WhatsAppService extends EventEmitter {
     }
   }
 
-  // Bersihkan isi .wwebjs_auth & .wwebjs_cache tanpa menghapus folder root mount volume Docker
+  // Bersihkan isi .wwebjs_auth & .wwebjs_cache tanpa menghapus folder root mount volume Docker.
+  // Gunakan atomic rename ke .trash-* lebih dulu agar path 'session' langsung bersih walau
+  // child process Chrome masih menutup file descriptor.
   _clearSessionDir() {
     for (const dirName of [".wwebjs_auth", ".wwebjs_cache"]) {
       const baseDir = path.join(process.cwd(), dirName);
       try {
         const entries = fs.readdirSync(baseDir);
         for (const entry of entries) {
+          const fullPath = path.join(baseDir, entry);
+          const trashPath = path.join(
+            baseDir,
+            `.trash-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+          );
           try {
-            fs.rmSync(path.join(baseDir, entry), { recursive: true, force: true, maxRetries: 3 });
-          } catch (e) {
-            console.warn(`[Auth] Gagal menghapus ${dirName}/${entry}:`, e.message);
+            fs.renameSync(fullPath, trashPath);
+            fs.rmSync(trashPath, { recursive: true, force: true, maxRetries: 3 });
+          } catch (_) {
+            try {
+              fs.rmSync(fullPath, { recursive: true, force: true, maxRetries: 3 });
+            } catch (e) {
+              console.warn(`[Auth] Gagal menghapus ${dirName}/${entry}:`, e.message);
+            }
           }
         }
       } catch (_) {}
@@ -415,8 +425,13 @@ class WhatsAppService extends EventEmitter {
 
   _updateStatus(status, data = {}) {
     this.state.currentStatus = status;
+    if (data.reason || data.message) {
+      this.state.lastError = data.reason || data.message;
+    } else if (status === "ready" || status === "qr" || status === "authenticated") {
+      this.state.lastError = null;
+    }
     this.emit("status_change", { status, ...data });
-    console.log(`[STATUS] ${status}`);
+    console.log(`[STATUS] ${status}${data.reason ? ` (${data.reason})` : ""}`);
   }
 
   _registerEvents() {
@@ -726,6 +741,7 @@ class WhatsAppService extends EventEmitter {
     }
 
     if (this.client) {
+      const browserProc = this.client.pupBrowser?.process?.();
       try {
         this.client.removeAllListeners();
         if (this.client.pupBrowser && this.client.pupBrowser.isConnected()) {
@@ -733,6 +749,11 @@ class WhatsAppService extends EventEmitter {
         }
         await this.client.destroy();
       } catch (_) {}
+      if (browserProc && !browserProc.killed) {
+        try {
+          browserProc.kill("SIGKILL");
+        } catch (_) {}
+      }
       this.client = null;
     }
     this._cleanupSessionLocks();

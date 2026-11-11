@@ -178,25 +178,21 @@ cleanup_stale() {
 
 do_up() {
   log "🚀 [UP] Menjalankan container ${CONTAINER_NAME} (port ${APP_PORT} saja)..."
+  rm -f core.* 2>/dev/null || true
   cleanup_stale
-  _out="$(mktemp)"
-  if ! compose up -d 2>&1 | tee "$_out"; then :; fi
-  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-    if grep -qi "already in use" "$_out"; then
-      log "⚠️  [UP] Konflik nama container — hapus paksa lalu coba lagi..."
-      compose down --remove-orphans >/dev/null 2>&1 || true
-      cleanup_stale
-      docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-      compose up -d || { rm -f "$_out"; die "compose up gagal. Lihat output di atas."; }
-    else
-      if grep -qi "shm" "$_out"; then
-        log "⚠️  [UP] Daemon menolak 'shm_size'. Hapus baris 'shm_size: 2g' di $COMPOSE_FILE lalu ulangi."
-      fi
-      rm -f "$_out"
-      die "compose up gagal. Lihat output di atas."
-    fi
+  # Selalu hentikan & hapus container lama lebih dulu agar tidak pernah tertinggal
+  # container lama saat docker compose crash/gagal di shared hosting.
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ "$COMPOSE_OK" = "1" ] && compose up -d; then
+    :
+  else
+    log "ℹ️  [UP] Menyalakan container via 'docker run' langsung..."
+    cleanup_stale
+    run_container || die "Gagal menyalakan container $CONTAINER_NAME."
   fi
-  rm -f "$_out"
+  rm -f core.* 2>/dev/null || true
+  docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME" \
+    || die "Container $CONTAINER_NAME tidak berjalan setelah up."
 }
 
 wait_healthy() {
@@ -216,7 +212,7 @@ show_info() {
   echo "==================================================="
   echo "✅ wwebjs berjalan (cPanel, port ${APP_PORT})"
   echo "==================================================="
-  compose ps
+  docker ps -a --filter "name=^${CONTAINER_NAME}$"
   echo "---------------------------------------------------"
   echo "🌐 Root    : http://127.0.0.1:${APP_PORT}/"
   echo "📊 Health  : curl http://127.0.0.1:${APP_PORT}/health"
@@ -311,13 +307,14 @@ case "${1:-up}" in
       || die "Gagal membersihkan lock. Pastikan image $IMAGE_NAME sudah pernah di-build."
     log "🚀 [UNLOCK] Menyalakan kembali..."
     compose up -d; wait_healthy; show_info ;;
-  restart) compose restart; show_info ;;
+  restart) docker restart "$CONTAINER_NAME"; show_info ;;
   status)
-    compose ps
+    docker ps -a --filter "name=^${CONTAINER_NAME}$"
     echo "--- /health ---"
     curl -s -m 5 "http://localhost:${APP_PORT}/health" || echo "⚠️  Port ${APP_PORT} belum merespons."
+    echo ""
     ;;
-  down) compose down; log "🛑 Dihentikan (volume wwebjs-session tetap, session tidak hilang)." ;;
+  down) docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true; log "🛑 Dihentikan (volume wwebjs-session tetap, session tidak hilang)." ;;
   -h|--help|help)
     echo "Pakai SATU perintah: bash build.sh"
     echo "Update kode + deploy: bash build.sh update"

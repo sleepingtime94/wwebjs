@@ -10,6 +10,9 @@ async function getStatus(req, res) {
     success: true,
     status: state.currentStatus,
     ready: state.clientReady,
+    hasQr: Boolean(state.lastQrDataUrl),
+    lastError: state.lastError || null,
+    startedAt: state.startedAt || null,
     me: waService.getAccountInfo(),
     queue: queueStats,
   });
