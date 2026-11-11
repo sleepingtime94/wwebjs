@@ -244,6 +244,17 @@ class WhatsAppService extends EventEmitter {
             "atau set PUPPETEER_EXECUTABLE_PATH di .env ke Chrome sistem."
         );
       }
+      // Init gagal (mis. browser crash saat re-init setelah logout): coba lagi otomatis
+      // agar tidak stuck "disconnected" tanpa QR.
+      if (!/profile.*in use|singleton|locked/i.test(msg)) {
+        this.initRetryCount += 1;
+        if (this.initRetryCount <= 5) {
+          console.error(`[WA] Init gagal — retry ${this.initRetryCount}/5 dalam 10 dtk...`);
+          this._updateStatus("reconnecting", { reason: msg, attempt: this.initRetryCount });
+          this.reconnect(10000);
+          return;
+        }
+      }
       this._updateStatus("disconnected", { reason: msg });
     });
 
@@ -602,6 +613,12 @@ class WhatsAppService extends EventEmitter {
     }
     try {
       await this.client.logout();
+      // Client.logout() menutup browser sebelum event "disconnected" (LOGOUT) sempat
+      // terbit, sehingga tanpa ini tidak ada re-init dan QR baru tidak pernah muncul.
+      this.state.clientReady = false;
+      this.state.lastQrDataUrl = null;
+      this._updateStatus("disconnected", { reason: "LOGOUT" });
+      this.reconnect(2000);
     } catch (err) {
       console.warn("[WA] Logout gagal, paksa destroy + re-init:", err.message);
       try {
