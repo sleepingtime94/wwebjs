@@ -25,8 +25,9 @@ WORKDIR /app
 
 # Install dependensi dulu agar layer Docker ter-cache
 # (Chrome sistem sudah terinstal di atas, jadi tidak perlu unduh browser Puppeteer)
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+ || npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
 # Salin source aplikasi
 COPY server.js logs.sql ./

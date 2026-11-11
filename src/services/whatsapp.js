@@ -221,16 +221,26 @@ class WhatsAppService extends EventEmitter {
     const userAgent = this._buildUserAgent(resolved?.path);
     console.log(`[WA] User-Agent: ${userAgent}`);
 
+    const pinnedWebVersion = (process.env.WA_WEB_VERSION || "").trim();
+    const webVersionOpts = pinnedWebVersion
+      ? {
+          webVersion: pinnedWebVersion,
+          webVersionCache: {
+            type: "remote",
+            remotePath:
+              "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html",
+            strict: false,
+          },
+        }
+      : {
+          webVersionCache: { type: "none" },
+        };
+
     this.client = new Client({
       authStrategy: new LocalAuth(),
       userAgent,
       puppeteer: puppeteerConfig,
-      webVersionCache: {
-        type: "remote",
-        remotePath:
-          "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html",
-        strict: false,
-      },
+      ...webVersionOpts,
     });
 
     this._setupLogoutOverride();
@@ -296,6 +306,42 @@ class WhatsAppService extends EventEmitter {
         await this._setupResourceBlocking(this.client.pupPage);
       }
     };
+
+    // Guard anti "Cannot read properties of null (reading 'Socket')":
+    // Tunggu sampai modul internal WhatsApp Web (WAWebSocketModel, WAWebConnModel, WAWebCmd)
+    // benar-benar termuat sebelum inject() melanjutkan inisialisasi auth/QR.
+    const originalGetWWebVersion = this.client.getWWebVersion.bind(this.client);
+    this.client.getWWebVersion = async () => {
+      if (this.client?.pupPage) {
+        await this.client.pupPage
+          .waitForFunction(
+            () => {
+              try {
+                const sock = window.require?.("WAWebSocketModel")?.Socket;
+                const conn = window.require?.("WAWebConnModel")?.Conn;
+                const cmd = window.require?.("WAWebCmd")?.Cmd;
+                return Boolean(
+                  window.Debug?.VERSION &&
+                    sock &&
+                    sock.state &&
+                    sock.state !== "OPENING" &&
+                    sock.state !== "UNLAUNCHED" &&
+                    sock.state !== "PAIRING" &&
+                    conn &&
+                    cmd
+                );
+              } catch (_) {
+                return false;
+              }
+            },
+            { timeout: 60000 }
+          )
+          .catch((err) => {
+            console.warn("[WA] Menunggu modul WAWebSocketModel timeout/warning:", err.message);
+          });
+      }
+      return originalGetWWebVersion();
+    };
   }
 
   async _setupResourceBlocking(page) {
@@ -303,17 +349,18 @@ class WhatsAppService extends EventEmitter {
     try {
       await page.setRequestInterception(true);
       page.on("request", (req) => {
+        if (req.isInterceptResolutionHandled?.()) return;
         const resourceType = req.resourceType();
         const url = req.url();
 
         // 1. Blokir media berat: video dan audio (status, voice notes, video streams)
         if (resourceType === "media") {
-          return req.abort();
+          return req.abort().catch(() => {});
         }
 
         // 2. Blokir font eksternal non-esensial (hemat font cache buffer)
         if (resourceType === "font") {
-          return req.abort();
+          return req.abort().catch(() => {});
         }
 
         // 3. Blokir tracker / telemetri analitik
@@ -322,10 +369,10 @@ class WhatsAppService extends EventEmitter {
           url.includes("doubleclick") ||
           url.includes("crashlytics")
         ) {
-          return req.abort();
+          return req.abort().catch(() => {});
         }
 
-        req.continue();
+        req.continue().catch(() => {});
       });
       console.log("[WA:Memory] Resource blocking aktif (media, font eksternal, tracker diblokir).");
     } catch (err) {
@@ -333,35 +380,36 @@ class WhatsAppService extends EventEmitter {
     }
   }
 
+  // Bersihkan isi .wwebjs_auth & .wwebjs_cache tanpa menghapus folder root mount volume Docker
+  _clearSessionDir() {
+    for (const dirName of [".wwebjs_auth", ".wwebjs_cache"]) {
+      const baseDir = path.join(process.cwd(), dirName);
+      try {
+        const entries = fs.readdirSync(baseDir);
+        for (const entry of entries) {
+          try {
+            fs.rmSync(path.join(baseDir, entry), { recursive: true, force: true, maxRetries: 3 });
+          } catch (e) {
+            console.warn(`[Auth] Gagal menghapus ${dirName}/${entry}:`, e.message);
+          }
+        }
+      } catch (_) {}
+    }
+    console.log("[Auth] Data session & cache lama dibersihkan.");
+  }
+
   _setupLogoutOverride() {
-    const originalLogout = this.client.authStrategy.logout.bind(this.client.authStrategy);
     this.client.authStrategy.logout = async () => {
       try {
-        if (this.client.pupBrowser && this.client.pupBrowser.isConnected()) {
+        if (this.client?.pupBrowser && this.client.pupBrowser.isConnected()) {
           await this.client.pupBrowser.close();
           console.log("[Auth] Browser closed to release file locks.");
         }
       } catch (e) {
         console.log("[Auth] Browser close warning:", e.message);
       }
-
-      await new Promise((r) => setTimeout(r, 2000));
-
-      try {
-        await originalLogout();
-        console.log("[Auth] Session directory cleared.");
-      } catch (e) {
-        console.log("[Auth] Standard logout failed, forcing session removal:", e.message);
-        const sessionDir = this.client.authStrategy.userDataDir;
-        if (sessionDir) {
-          try {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-            console.log("[Auth] Session directory force-removed.");
-          } catch (err) {
-            console.warn("[Auth] Could not remove session dir (non-fatal):", err.message);
-          }
-        }
-      }
+      await new Promise((r) => setTimeout(r, 1000));
+      this._clearSessionDir();
     };
   }
 
@@ -436,14 +484,16 @@ class WhatsAppService extends EventEmitter {
     this.client.on("disconnected", async (reason) => {
       this.state.clientReady = false;
       this.state.lastQrDataUrl = null;
+      this.initRetryCount = 0;
       this._updateStatus("disconnected", { reason });
       console.log("[WA] Disconnected:", reason);
 
-      this.reconnect(reason === "LOGOUT" ? 4000 : 5000);
+      const isLogout = reason === "LOGOUT" || reason === "NAVIGATION";
+      this.reconnect(isLogout ? 2500 : 5000, { clearSession: reason === "LOGOUT" });
     });
   }
 
-  reconnect(delayMs = 5000) {
+  reconnect(delayMs = 5000, { clearSession = false } = {}) {
     if (this.isReconnecting) {
       console.log("[WA] Reconnect already in progress, skipping duplicate call.");
       return;
@@ -461,6 +511,10 @@ class WhatsAppService extends EventEmitter {
         await this.destroy();
       } catch (err) {
         console.warn("[WA] Error destroying client during reconnect:", err.message);
+      }
+
+      if (clearSession) {
+        this._clearSessionDir();
       }
 
       this._updateStatus("initializing");
@@ -627,31 +681,42 @@ class WhatsAppService extends EventEmitter {
   }
 
   // Keluar dari sesi terhubung: membersihkan session .wwebjs_auth lalu
-  // memicu re-inisialisasi otomatis (event "disconnected" LOGOUT -> reconnect),
-  // sehingga QR baru diterbitkan via GET /api/qr.
+  // memicu re-inisialisasi otomatis sehingga QR baru diterbitkan via GET /api/qr.
   async logout() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.isReconnecting = false;
+    this.initRetryCount = 0;
+    this.state.clientReady = false;
     this.state.lastQrDataUrl = null;
-    if (!this.client) {
-      this._updateStatus("initializing");
-      this.init();
-      return;
-    }
-    try {
-      await this.client.logout();
-      // Client.logout() menutup browser sebelum event "disconnected" (LOGOUT) sempat
-      // terbit, sehingga tanpa ini tidak ada re-init dan QR baru tidak pernah muncul.
-      this.state.clientReady = false;
-      this.state.lastQrDataUrl = null;
-      this._updateStatus("disconnected", { reason: "LOGOUT" });
-      this.reconnect(2000);
-    } catch (err) {
-      console.warn("[WA] Logout gagal, paksa destroy + re-init:", err.message);
+
+    if (this.client) {
       try {
-        await this.destroy();
-      } catch (_) {}
-      this._updateStatus("initializing");
-      this.init();
+        // Matikan listener dulu agar navigasi ?post_logout=1 tidak memicu inject() liar
+        this.client.removeAllListeners();
+        this.client.pupPage?.removeAllListeners?.("framenavigated");
+        if (this.client.pupPage && !this.client.pupPage.isClosed()) {
+          await Promise.race([
+            this.client.pupPage.evaluate(() => {
+              return window.require?.("WAWebSocketModel")?.Socket?.logout?.();
+            }),
+            new Promise((r) => setTimeout(r, 4000)),
+          ]).catch(() => {});
+        }
+      } catch (err) {
+        console.warn("[WA] Logout socket warning:", err.message);
+      }
     }
+
+    try {
+      await this.destroy();
+    } catch (_) {}
+
+    this._clearSessionDir();
+    this._updateStatus("disconnected", { reason: "LOGOUT" });
+    this.reconnect(1500);
   }
 
   async destroy() {
