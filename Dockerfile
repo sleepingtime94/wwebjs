@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
 
 # Dependensi sistem untuk Google Chrome headless + whatsapp-web.js + tini (init PID 1)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget gnupg ca-certificates fonts-liberation tini \
+    wget gnupg git ca-certificates fonts-liberation tini \
     libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 \
     libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc-s1 \
     libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \

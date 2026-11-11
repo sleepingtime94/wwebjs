@@ -253,15 +253,15 @@ do_git_pull() {
 }
 
 do_update_pkg() {
-  log "📦 [PKG] Update whatsapp-web.js ke versi terbaru (package.json + package-lock.json)..."
+  log "📦 [PKG] Update whatsapp-web.js ke commit terbaru GitHub main (package.json + package-lock.json)..."
   _before="$(grep -o '"whatsapp-web.js": *"[^"]*"' package.json | head -n1)"
   if need_cmd npm; then
-    npm install whatsapp-web.js@latest --package-lock-only --ignore-scripts --no-audit --no-fund \
+    npm install "git+https://github.com/pedroslopez/whatsapp-web.js.git#main" --package-lock-only --ignore-scripts --no-audit --no-fund \
       || die "npm install whatsapp-web.js@latest gagal."
   else
     log "ℹ️  [PKG] npm host tidak ada — pakai container node:20-slim sekali-pakai."
-    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$(pwd)":/app -w /app node:20-slim \
-      npm install whatsapp-web.js@latest --package-lock-only --ignore-scripts --no-audit --no-fund \
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$(pwd)":/app -w /app node:20 \
+      npm install "git+https://github.com/pedroslopez/whatsapp-web.js.git#main" --package-lock-only --ignore-scripts --no-audit --no-fund \
       || die "Update package via docker gagal."
   fi
   _after="$(grep -o '"whatsapp-web.js": *"[^"]*"' package.json | head -n1)"
